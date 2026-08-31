@@ -18,6 +18,9 @@ results/simulated_data/
 # Separate socioeconomic plotting work, not part of the core simulation framework.
 results/aml_context_plots/
 
+# Local paper drafting files are intentionally kept outside the public simulation repository.
+paper/
+
 # Runtime logs are generated per run. Keep folder placeholders only.
 logs/**/*.log
 
