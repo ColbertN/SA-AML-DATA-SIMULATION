@@ -85,6 +85,15 @@ def _read_simulation_csv(input_csv: str | Path | None = None) -> pd.DataFrame:
 
 def _reconstruct_receiver_accounts(df_final: pd.DataFrame) -> pd.DataFrame:
     account_rows = df_final.sort_values(["Account_id", "Transaction_id"]).drop_duplicates("Account_id").copy()
+    if "Account_is_laundering" in df_final.columns:
+        account_labels = (
+            pd.to_numeric(df_final["Account_is_laundering"], errors="coerce")
+            .fillna(0)
+            .astype(int)
+            .groupby(df_final["Account_id"])
+            .max()
+        )
+        account_rows["Account_is_laundering"] = account_rows["Account_id"].map(account_labels).fillna(0).astype(int)
     if "Receiver_account" not in account_rows.columns:
         account_rows["Receiver_account"] = account_rows["Account_id"]
     account_rows = account_rows.drop(columns=["Account_id"], errors="ignore")
@@ -1292,6 +1301,18 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
             how="left",
         )
     )
+    if "Account_is_laundering" in account_summary.columns:
+        account_summary["Account_is_laundering"] = (
+            pd.to_numeric(account_summary["Account_is_laundering"], errors="coerce")
+            .fillna(0)
+            .astype(int)
+        )
+    if "Account_is_laundering" in receiver_accounts.columns:
+        receiver_accounts["Account_is_laundering"] = (
+            pd.to_numeric(receiver_accounts["Account_is_laundering"], errors="coerce")
+            .fillna(0)
+            .astype(int)
+        )
     account_summary["Label"] = np.where(account_summary["Account_is_laundering"] == 1, "Suspicious AML account", "Legitimate account")
     account_summary["observed_span_days"] = (account_summary["last_tx"] - account_summary["first_tx"]).dt.days.add(1).clip(lower=1)
     account_summary["tx_per_active_month"] = account_summary["tx_count"] / np.maximum(account_summary["Active_observation_days"] / 30.4375, 1 / 30.4375)
@@ -1384,7 +1405,16 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
         ax.set_ylabel("")
         _set_count_axis(ax, axis="x")
         for bar, value in zip(bars, counts.values):
-            ax.text(value + total * 0.012, bar.get_y() + bar.get_height() / 2, f"{value:,.0f} ({value / total * 100:.2f}%)", va="center", fontsize=8)
+            ax.text(
+                value + total * 0.014,
+                bar.get_y() + bar.get_height() / 2,
+                f"{value:,.0f} ({value / total * 100:.2f}%)",
+                va="center",
+                ha="left",
+                fontsize=8,
+                clip_on=False,
+                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.75, "pad": 1.0},
+            )
         ax.set_xlim(0, max(counts.values) * 1.28)
     finish_plot("00_dataset_overview_counts.png")
 

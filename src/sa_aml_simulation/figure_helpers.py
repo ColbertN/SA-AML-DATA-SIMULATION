@@ -167,6 +167,10 @@ SAVE_COMBINED_PANEL_PLOTS = os.getenv("AML_SIM_SAVE_COMBINED_PLOTS", "0") != "0"
 
 
 def _save_single_axis_panel(fig, ax, output_path, dpi=180):
+    other_axes = [other_ax for other_ax in fig.axes if other_ax is not ax]
+    original_visibility = [other_ax.get_visible() for other_ax in other_axes]
+    for other_ax in other_axes:
+        other_ax.set_visible(False)
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
     bbox = ax.get_tightbbox(renderer).transformed(fig.dpi_scale_trans.inverted())
@@ -174,6 +178,8 @@ def _save_single_axis_panel(fig, ax, output_path, dpi=180):
     bbox = bbox.expanded(1.08, 1.12)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=dpi, bbox_inches=bbox)
+    for other_ax, visible in zip(other_axes, original_visibility):
+        other_ax.set_visible(visible)
 
 
 def plot_output_path(filename):
@@ -327,6 +333,11 @@ def _add_bar_labels(ax, rects, orientation, percent=False, scale=1.0, decimals=1
             ax.set_ylim(bottom, desired_top)
 
 
+def _axis_has_manual_text(ax):
+    """Return True when an axis already contains intentional text annotations."""
+    return any(text.get_visible() and text.get_text().strip() for text in ax.texts)
+
+
 def polish_plot_figure(fig=None):
     fig = fig or plt.gcf()
     for ax in fig.axes:
@@ -334,7 +345,7 @@ def polish_plot_figure(fig=None):
         _clean_tick_and_legend_labels(ax)
         rects = _bar_rectangles(ax)
         # Avoid unreadable labels on histograms or highly stacked charts.
-        if 1 <= len(rects) <= 40:
+        if 1 <= len(rects) <= 40 and not _axis_has_manual_text(ax):
             orientation = _infer_bar_orientation(ax, rects)
             max_value = max(
                 [patch.get_width() if orientation == "h" else patch.get_height() for patch in rects]

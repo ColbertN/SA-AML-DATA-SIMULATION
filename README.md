@@ -1,29 +1,77 @@
 # South African AML Data Simulation
 
 This repository contains a context-aware synthetic anti-money laundering (AML)
-data simulation framework for South African retail banking behaviour. The
-framework is designed to generate synthetic transaction data that reflects both
-ordinary socioeconomic behaviour and suspicious AML typologies in a South
-African setting.
+data simulation framework for South African retail banking behaviour. It is
+designed to generate reproducible synthetic transaction data that combines
+ordinary South African socioeconomic activity with typology-grounded suspicious
+AML behaviour.
 
-The goal is not to provide a trained detection model. The goal is to create a
-reproducible data-generation pipeline that can later support AML modelling,
-validation, explainability, calibration and benchmarking.
+The project does not provide a trained detection model. Its purpose is to create
+a transparent simulation base that can be reused for AML research, validation,
+scenario analysis, sequential modelling, explainability, calibration and
+benchmarking in a South African context.
 
-## What The Simulator Generates
+## Executive Summary
 
-The simulator creates a synthetic retail banking population with monitored
-receiver accounts, account profiles, transaction histories and scenario labels.
-It represents legitimate behaviour such as salary payments, household spending,
-grant-linked flows, informal business cash cycles, spaza and township retail,
-taxi and transport cash cycles, remittances, stokvels, business operating
-payments and irregular income.
+Open AML research is constrained because real banking data are confidential,
+suspicious labels are rare, and operational alert labels do not provide complete
+ground truth. This limitation is more serious in South Africa because local
+retail behaviour differs from many international AML benchmark assumptions.
+Normal customers may rely on cash, receive social grants, operate informal or
+unregistered businesses, send regional remittances, use personal accounts for
+small business turnover, receive irregular income, or transact around salary and
+grant payment days. These patterns can look unusual if they are interpreted
+without local context.
 
-It also overlays suspicious AML scenarios such as structuring, mule accounts,
-cross-border layering, procurement corruption, shell or front company flows,
-beneficial ownership opacity, crypto off-ramping, Ponzi collections, cybercrime
-proceeds, narcotics cash, illegal gold, property integration and high-value goods
+The simulator addresses this gap by creating a synthetic South African retail
+banking environment where both normal and suspicious behaviour are generated
+from documented context. The normal class includes salary and household
+payments, grant-linked flows, township and spaza retail activity, taxi and
+transport cash cycles, informal business turnover, remittances, stokvels,
+business operating payments and low-value day-to-day spending. The suspicious
+class overlays 22 AML typologies including structuring, mule accounts,
+cross-border layering, procurement corruption, shell or front companies,
+beneficial ownership opacity, crypto off-ramping, Ponzi collections, cybercrime,
+narcotics cash, illegal gold, property integration and high-value goods
 purchases.
+
+The framework is intended to support South African and African financial-crime
+research by reducing dependence on foreign behavioural assumptions and by
+providing a reusable, inspectable dataset for work that cannot access real bank
+records. Public inquiries and official reports on corruption, procurement abuse,
+cross-border risk, financial intelligence reporting and organised crime provide
+motivation, but the generated data remain fully synthetic and should not be read
+as real prevalence estimates or as claims about any person, institution,
+province or country.
+
+## Current Generated Run
+
+The latest saved run in the local results tables has the following summary:
+
+| Metric | Value |
+| --- | ---: |
+| Observation period | 2024-01-01 to 2026-03-31 |
+| Observation days | 821 |
+| Receiver accounts | 35,000 |
+| Transaction rows | 1,408,345 |
+| Average transactions per account | 40.24 |
+| Median transactions per account | 27 |
+| 95th percentile transactions per account | 125 |
+| Maximum transactions per account | 220 |
+| Legitimate transaction rows | 1,391,618 |
+| Suspicious AML transaction rows | 16,727 |
+| Legitimate accounts | 31,498 |
+| Suspicious AML accounts | 3,502 |
+| Transaction-level suspicious share | 1.19% |
+| Account-level suspicious share | 10.01% |
+| AML scenarios represented | 22 |
+| Normal behaviour categories represented | 11 |
+| Cross-border transaction share | 14.35% |
+| FATF contextual exposure share | 5.51% |
+
+Large generated datasets under `results/simulated_data/` are ignored by Git
+because full simulation files can exceed GitHub's normal file-size limit. They
+can be regenerated from the notebook or scripts.
 
 ## Project Structure
 
@@ -67,132 +115,143 @@ purchases.
 |   |-- figures/
 ```
 
-Large generated datasets under `results/simulated_data/` are ignored by Git
-because full simulation CSV files can exceed GitHub's normal file-size limit.
-They can be regenerated from the scripts or notebook.
-
 ## Simulation Flow
 
-The core workflow follows the same logic whether it is run from the notebook or
-from `scripts/main.py`.
+The same simulation logic is available through the notebook and through
+`scripts/main.py`.
 
 ### 1. Configuration And Setup
 
-The run starts by reading shared configuration values from
-`src/sa_aml_simulation/config.py`. These defaults define the output prefix, the
-number of receiver accounts, the target suspicious-account share, the simulation
-date range, the random seed, the maximum transaction cap per account and the
-suspicious transaction probability scale.
+The run starts by reading shared defaults from
+`src/sa_aml_simulation/config.py`. These define the output prefix, number of
+receiver accounts, target suspicious-account share, observation window, random
+seed, maximum transaction cap per account and suspicious transaction probability
+scale.
 
-The path setup in `src/sa_aml_simulation/paths.py` creates the required folder
-layout for simulated data, figures, tables and logs. The script entry points
-also create timestamped run logs so long simulations can be monitored and
-audited after completion.
+`src/sa_aml_simulation/paths.py` creates the folder layout for data, figures,
+tables and logs. Script runs also write timestamped logs so the user can see
+which phase is running and how long each run takes.
 
 ### 2. Account Population Generation
 
-The simulator first creates monitored receiver accounts. Each account receives a
-synthetic account identifier and contextual profile attributes such as customer
-type, province, employment status, employment sector, income band, estimated
-monthly income, age band, gender, education level, nationality, residency status
-and migrant-worker context.
+The simulator creates monitored receiver accounts. Each account receives a
+synthetic identity and profile variables including customer type, province,
+employment status, employment sector, income band, estimated monthly income,
+age, age band, gender, education level, nationality, residency status,
+migrant-worker flag, settlement context, financial inclusion segment and
+channel preference.
 
-The account generator also assigns South African socioeconomic context,
-including cash-intensity band, informal-business flag, business-registration
-status, trading permit, VAT-registration status, business premises type,
-personal-account business use, estimated daily cash turnover, access to bank
-loans and whether business records are kept.
+These variables are synthetic. They describe the simulated population and help
+test whether AML behaviour can be analysed without treating socioeconomic
+attributes as automatic suspiciousness.
 
-### 3. Risk Context Assignment
+### 3. Business, Informality And Cash Context
 
-Before transactions are created, the simulator assigns contextual risk
-attributes that influence laundering probability and scenario selection. These
-include KYC strength, public-sector exposure, procurement-vendor status, PEP or
-high-risk person context, high-risk sector category, beneficial-ownership
+The account generator then adds business and cash-context fields: cash intensity
+score, cash intensity band, informal business flag, business registration
+status, trading permit, VAT registration indicator, personal-account business
+use, premises type, estimated daily cash turnover, business age, business record
+keeping and bank loan access.
+
+This stage is important because informal and unregistered business activity is a
+normal part of the South African retail environment. The simulator therefore
+allows cash-heavy behaviour to exist in the legitimate class.
+
+### 4. Risk Context Assignment
+
+Before transactions are generated, accounts receive contextual risk variables:
+KYC strength, public-sector exposure, procurement-vendor status, PEP category,
+high-risk person context, high-risk sector category, beneficial ownership
 opacity, intermediary account flag, virtual-asset exposure, connected-party
-count, adverse media flag, sanctions screening context and cross-border profile
-links.
+count, targeted financial sanctions screening context, adverse media flag,
+profile-level foreign counterparty and jurisdiction risk tier.
 
-These fields are not deterministic laundering labels. They are context variables
-that make some behaviours more likely while still allowing legitimate and
-suspicious accounts to overlap.
+These fields influence probability and scenario weighting. They are not
+deterministic labels. For example, an account can be public-sector exposed,
+grant-linked, cash-heavy or cross-border active and still be legitimate.
 
-### 4. Account Life Cycle And Transaction Scheduling
+### 5. Account Life Cycle And Scheduling
 
-Each account receives an opening date, first observed transaction date, active
-observation window, account age and activity multiplier. This prevents the data
-from assuming that every account is active for the full period or has the same
-number of transactions.
+Each account receives an account-open date, first observed transaction date,
+active observation days, account age, activity multiplier, expected transaction
+count and generated transaction count. Transaction counts vary by customer and
+behaviour, with a current maximum cap of 220 transactions per account.
 
-Transaction counts are generated with behaviour-conditioned overdispersion, so
-some customers have very few transactions and others have many more. Suspicious
-accounts are not automatically high-volume accounts, and legitimate accounts are
-not automatically low-volume accounts.
+This prevents the dataset from becoming too obvious. Suspicious accounts are
+not automatically high-volume accounts, and legitimate accounts are not
+automatically low-volume accounts.
 
-### 5. Legitimate Behaviour Engine
+### 6. Legitimate Behaviour Engine
 
-For normal transactions, the simulator selects a legitimate behaviour category
-and generates payment timing, transaction amounts, direction and payment rails
-according to that behaviour. This includes salary timing, salary-week household
-spending, grant-linked inflows and post-grant spending, low-value day-to-day
-payments, remittances, informal cash cycles, taxi cash activity, stokvel
-contributions and ordinary business operations.
+Normal transactions are generated from ordinary behavioural routines. The
+simulator includes salary-day and grant-day timing, early-month and salary-week
+household spending, debit-order-like payments, cash withdrawals, airtime/data,
+transport, grocery-style purchases, remittances, informal business turnover and
+business operating payments. These are represented through transaction timing,
+amount, direction, counterparty type, payment rail and transaction purpose
+category rather than through free-text transaction descriptions.
 
-This layer is important because real South African retail behaviour can be
-irregular, cash-heavy or cross-border without being suspicious.
+Free-text descriptions are intentionally excluded from the modelling-ready raw
+data because references can be noisy or deliberately misleading. Behaviour is
+therefore represented by structured fields and temporal/payment patterns.
 
-### 6. Suspicious Typology Engine
+### 7. Suspicious Typology Engine
 
-For accounts selected as laundering accounts, the simulator assigns one of the
-AML scenarios. Suspicious transactions are then overlaid within the account's
-transaction history. A suspicious account can still contain normal transactions,
-which makes the data less obvious and more realistic.
+Accounts selected as laundering accounts receive one AML typology. The typology
+does not convert every transaction on that account into a suspicious
+transaction. Suspicious events are overlaid inside otherwise ordinary account
+activity, so a laundering account can still have salary, grocery, grant,
+business, remittance or normal retail transactions.
 
-Scenario assignment is context-weighted. For example, cash-intensive profiles
-are more likely to produce cash-placement typologies, cross-border profiles are
-more likely to produce layering typologies, procurement exposure increases
-tender-related scenarios, and virtual-asset exposure increases crypto off-ramp
-scenarios.
+Scenario assignment is context-weighted:
 
-### 7. Payment And Jurisdiction Routing
+- cash-intensive profiles are more likely to produce cash placement scenarios;
+- rapid digital profiles are more likely to produce mule, cybercrime or invoice
+  scam behaviour;
+- public-sector and procurement exposure increases tender-related behaviour;
+- ownership opacity increases shell, front company and legal-structure
+  scenarios;
+- cross-border links increase regional and high-risk jurisdiction layering;
+- virtual-asset exposure increases crypto off-ramp scenarios.
 
-Each transaction receives a payment type, amount, direction, counterparty type,
-currency and location context. The payment rails include domestic electronic
-transfers, RTC, PayShap, debit card, credit card, cash deposits, cash
-withdrawals, international wires, social grants, procurement EFT and crypto
-exchange off-ramp transactions.
+### 8. Payment And Jurisdiction Routing
 
-Jurisdiction routing distinguishes domestic South African activity, SADC
-corridors, FATF increased-monitoring jurisdictions, FATF call-for-action
-jurisdictions and other foreign counterparties. Jurisdiction exposure is treated
-as context, not automatic suspiciousness.
+Each transaction receives structured payment and jurisdiction fields:
+transaction timestamp, sender account, receiver account, counterparty account,
+inflow/outflow direction, amount, currency, payment type, counterparty type,
+transaction purpose category, location context, cross-border flag, SADC corridor
+flag, jurisdiction risk tier, cash-threshold near-miss flag, rounded-amount
+flag, public-sector counterparty flag and PEP-related transaction flag.
 
-### 8. Raw Output Assembly
+Payment rails include electronic transfer, RTC, PayShap, debit card, credit
+card, cash deposit, cash withdrawal, international wire, social grant,
+procurement EFT and crypto exchange off-ramp. The earlier "card acquiring"
+label has been removed.
 
-The final raw simulation dataset is exported to
-`results/simulated_data/01_full_saml/`. A smaller behaviour-only version is
-exported to `results/simulated_data/02_behaviour_only/`.
+### 9. Raw Output Assembly
 
-The raw public output intentionally excludes downstream modelling-engineered
-features such as cyclical encodings, rolling statistics, account aggregates,
-sequence-density fields and composite risk scores. Those fields may be rebuilt
-inside the figure pipeline for validation, but they are not part of the raw
-simulation CSV intended for reuse.
+The simulator exports a full synthetic SAML-style transaction file, a
+behaviour-only file, an optional Excel workbook and optional engineered
+diagnostics. The main public raw output excludes downstream modelling-engineered
+features such as cyclical encodings, rolling sequence statistics, account
+aggregates, sequence-density fields and composite risk scores. Researchers can
+create their own engineered features from the raw simulation output.
 
-### 9. Figures And Insight Tables
+### 10. Figures, Tables And Diagnostics
 
-The figure pipeline in `src/sa_aml_simulation/figure_pipeline.py` reads a saved
-simulation CSV and regenerates validation figures and insight tables. It does
-not rerun the simulation.
+`scripts/save_figures.py` reads an existing simulation CSV and regenerates
+figures and insight tables without rerunning the simulation. Figures are saved
+individually by section so they can be used cleanly in presentations or LaTeX
+documents.
 
-Figures are saved under `results/images/` by section:
+Image folders:
 
 - `00_framework`: framework and architecture visuals
 - `01_eda_overview`: dataset size, class balance and basic EDA
 - `02_temporal_sequence`: time coverage, sequence length and transaction timing
 - `03_payments_amounts`: amount and payment-rail diagnostics
 - `04_aml_typologies`: AML scenario metrics and relationship examples
-- `05_normal_behaviour`: legitimate socioeconomic behaviour and grants
+- `05_normal_behaviour`: legitimate socioeconomic behaviour and grant analysis
 - `06_customer_profiles`: income, employment, customer type and demographics
 - `07_geography`: province, nationality and cross-border exposure
 - `08_informality`: informal and unregistered business behaviour
@@ -201,15 +260,126 @@ Figures are saved under `results/images/` by section:
 Insight tables are saved under `results/tables/csv/` and
 `results/tables/excel/`.
 
-### 10. Logging
+## AML Scenario Catalogue
 
-Every script run creates a timestamped log:
+The simulator represents all 22 AML typologies below. These scenarios are
+synthetic design categories grounded in AML typology, regulatory and contextual
+sources.
 
-- simulation logs: `logs/main_simulation/`
-- figure-generation logs: `logs/figures/`
+| Code | AML scenario | Stage | What the scenario represents |
+| --- | --- | --- | --- |
+| SA_AML_001 | Structuring / Smurfing Cash Deposits | Placement | Repeated cash deposits near threshold-sensitive ranges. |
+| SA_AML_002 | Cash Courier / Bulk Cash Movement | Placement | Large or repeated cash movements inconsistent with profile. |
+| SA_AML_003 | Mule Account / Rapid Pass-Through | Layering | Many-to-one inflows followed by rapid withdrawals or onward transfers. |
+| SA_AML_004 | Cross-Border Layering via SADC Corridor | Layering | Regional transfers through SADC corridors that may resemble remittance misuse. |
+| SA_AML_005 | High-Risk Jurisdiction Layering | Layering | Cross-border flows involving FATF call-for-action or increased-monitoring tiers. |
+| SA_AML_006 | Intermediary / Trust Account Abuse | Layering | Pass-through behaviour using intermediary or trust-style account patterns. |
+| SA_AML_007 | Procurement Corruption / Tender Kickback | Integration | Public-sector or connected-vendor flows linked to tender abuse typologies. |
+| SA_AML_008 | Shell or Front Company Flow | Layering | High-value flows through opaque or front-entity style accounts. |
+| SA_AML_009 | Complex Legal Structure / Beneficial Ownership Obfuscation | Layering | Ownership opacity, unrelated counterparties and complex entity movement. |
+| SA_AML_010 | Crypto Asset Off-Ramp | Layering / Integration | Virtual-asset off-ramp followed by bank transfer or cash-out behaviour. |
+| SA_AML_011 | Ponzi / Investment Scheme Collections | Placement / Layering | Multiple unrelated investor-like deposits into a collector account. |
+| SA_AML_012 | Fraudulent Company or Invoice Scam | Layering | Victim-company inflows followed by rapid onward payments. |
+| SA_AML_013 | Cybercrime Proceeds | Layering | Fast digital transfers and rapid repeat movement after cybercrime-like inflows. |
+| SA_AML_014 | Narcotics Cash Proceeds | Placement | High cash frequency and unexplained retail-style cash deposits. |
+| SA_AML_015 | Illegal Gold or Precious Metals | Placement / Integration | Precious-metal linked payments, cash movement or cross-border flows. |
+| SA_AML_016 | Environmental or Wildlife Crime Proceeds | Layering | Export, logistics or resource-crime style proceeds movement. |
+| SA_AML_017 | Stolen Student Loan or Grant Abuse | Placement / Layering | Student funding, grant or benefit abuse followed by atypical cash-out/transfers. |
+| SA_AML_018 | Casino or Gambling Laundering | Integration | Cash or electronic movement linked to gambling-style counterparties. |
+| SA_AML_019 | Property / Real Estate Integration | Integration | High-value property deposits, rentals or settlement-style flows. |
+| SA_AML_020 | Motor Vehicle or High-Value Goods Purchase | Integration | High-value goods purchases through cash or unusual third-party payments. |
+| SA_AML_021 | Trade-Based Import-Export Layering | Layering | International trade payments inconsistent with stated customer profile. |
+| SA_AML_022 | NPO / Community Organisation Misuse | Layering | Donation-like flows involving unrelated or foreign counterparties. |
 
-Each log records the run type, run name, start time, command arguments, all
-printed progress steps, finish time, total runtime and final status.
+## Normal Behaviour Catalogue
+
+The normal class is intentionally diverse. It is not designed as a perfectly
+clean opposite of suspicious behaviour.
+
+| Normal behaviour category | Simulation meaning |
+| --- | --- |
+| Salary and household payments | Salary receipts, debit-order-like expenses, groceries, airtime/data, transport, cash-out and routine household payments. |
+| Grant-linked inflows and survival payments | Social grant receipts and low-value spending around grant payment periods. |
+| Informal registered business cash cycle | Registered small-business turnover with cash, transfers and some record/formalisation indicators. |
+| Informal unregistered business cash cycle | Unregistered small-business turnover, often using personal accounts and cash. |
+| Spaza / township retail cash cycle | Township retail, spaza, street-trading and supplier-payment behaviour. |
+| Taxi or transport cash cycle | Cash-heavy transport revenue, fuel, repairs and owner/operator payments. |
+| Low-value high-frequency retail payments | Everyday small-value payments through debit card, PayShap, RTC, EFT and cash channels. |
+| Remittance corridor activity | Family or worker remittances through SADC corridors and money-transfer-like rails. |
+| Stokvel / rotating savings contributions | Group savings contributions and periodic withdrawals. |
+| Business operating payments | Supplier, customer, payroll and operating transactions. |
+| Irregular income / gig work | Irregular wages, casual work, gig income and small living expenses. |
+
+## Demographics, Geography And Socioeconomic Coverage
+
+The simulator includes demographic and socioeconomic fields because the South
+African AML problem is context-sensitive. These fields make the population
+inspectable and support later fairness, subgroup and false-positive analysis.
+
+Demographic coverage:
+
+- age and age band
+- gender
+- education level
+- nationality
+- residency status
+- migrant-worker flag
+
+Geographic coverage:
+
+- all 9 South African provinces
+- metro, township/peri-urban, small-town and rural settlement context
+- SADC corridor countries
+- FATF call-for-action and increased-monitoring jurisdiction tiers
+- selected other foreign counterparties used for trade, family and VASP-like
+  corridors
+
+Socioeconomic and sector coverage:
+
+- formal employees
+- informal traders
+- grant recipients
+- cash-intensive SMEs
+- migrant workers and remittance users
+- students and youth accounts
+- public-sector employees
+- business owners
+- procurement vendors
+- corporate entities
+- NPO and community organisations
+- cash-intensive informal economy sectors
+- public procurement adjacent sectors
+- property and real estate
+- motor vehicle and high-value goods
+- import/export trade
+- crypto asset services
+- legal/professional intermediary contexts
+- casino/gambling
+- precious metals/stones
+
+Social grant fields include account-level grant context and transaction-level
+grant types. Non-grant transactions are marked as non-grant rather than left
+ambiguous. Grant-linked accounts can still have non-grant transactions, and a
+grant-linked account can still receive a suspicious typology overlay through
+another payment rail.
+
+## Design Choices To Reduce Obvious Leakage
+
+The simulator includes several protections against making the AML label too
+easy to infer:
+
+- Suspicious accounts retain ordinary customer behaviour.
+- Only a minority of transactions on a suspicious account are labelled as
+  suspicious AML transactions.
+- Transaction volume overlaps between legitimate and suspicious accounts.
+- The maximum transaction count is capped at 220 per account in the current
+  configuration.
+- Payment type is not a deterministic label.
+- Cross-border, cash-heavy, informal, grant-linked and high-risk-sector context
+  are risk context, not automatic suspiciousness.
+- Free-text transaction descriptions are excluded from the raw modelling-ready
+  dataset.
+- Downstream engineered modelling features are excluded from the main raw CSV.
 
 ## Running The Simulation
 
@@ -288,16 +458,172 @@ $env:AML_SIM_DATA_DIR="results/simulated_data"
 $env:AML_SIM_PLOTS_DIR="results/images"
 ```
 
-Set `AML_SIM_EXPORT_INSIGHTS=0` when you want to run the simulation without
-regenerating plots. Set `AML_SIM_EXPORT_TABLES=0` when you want to skip insight
-table exports.
+Set `AML_SIM_EXPORT_INSIGHTS=0` when running the simulation without regenerating
+plots. Set `AML_SIM_EXPORT_TABLES=0` when skipping insight table exports.
 
-## Notes On Reproducibility
+## Logging
 
-The default random seed is fixed, so the same configuration should reproduce the
-same synthetic dataset. Changing the number of accounts, observation window,
-transaction cap or suspicious-account target will produce a different run.
+Script runs create timestamped logs:
+
+- simulation logs: `logs/main_simulation/`
+- figure-generation logs: `logs/figures/`
+
+Each log records the run type, run name, start time, command arguments, printed
+progress steps, finish time, runtime and final status.
+
+## Reproducibility Notes
+
+The default random seed is fixed. Running the same configuration should
+reproduce the same synthetic dataset. Changing the number of accounts,
+observation window, transaction cap, output prefix or suspicious-account target
+will produce a different synthetic run.
 
 The generated data are synthetic. They should be used for research,
 benchmarking, validation and method development, not as empirical estimates of
 real South African laundering prevalence.
+
+## Limitations
+
+This simulator is not a bank system, regulator system or law-enforcement
+system. It does not claim to measure real crime rates. Labels are generated by
+design, so downstream models recover simulated typology structure rather than
+confirmed real-world criminal behaviour. Scenario weights are source-informed
+and behaviourally motivated, but they are not calibrated against confidential
+bank data.
+
+Geographic outputs are diagnostic simulation views. Province and country plots
+show synthetic exposure and routing context, not real risk rankings or crime
+statistics. FATF jurisdiction lists and public-risk context should be refreshed
+before any final dated publication.
+
+## Evidence Base And References
+
+The simulation design draws on regulatory, typology, socioeconomic, payment,
+synthetic-data and public-record sources. Key sources include:
+
+- Financial Action Task Force and ESAAMLG, "South Africa's measures to combat
+  money laundering and terrorist financing: Mutual Evaluation Report," 2021:
+  https://www.fatf-gafi.org/en/publications/Mutualevaluations/Mer-south-africa-2021.html
+- International Monetary Fund, "South Africa: Detailed Assessment Report on
+  Anti-Money Laundering and Combating the Financing of Terrorism," 2021:
+  https://www.imf.org/en/Publications/CR/Issues/2021/10/06/South-Africa-Detailed-Assessment-Report-on-Anti-Money-Laundering-and-Combating-the-482069
+- Financial Action Task Force, "High-risk and other monitored jurisdictions,"
+  February 2026:
+  https://www.fatf-gafi.org/en/countries/black-and-grey-lists.html
+- Financial Action Task Force, "Jurisdictions under Increased Monitoring,"
+  October 2025:
+  https://www.fatf-gafi.org/en/publications/High-risk-and-other-monitored-jurisdictions/increased-monitoring-october-2025.html
+- Financial Intelligence Centre, "What are my reporting obligations?":
+  https://www.fic.gov.za/faqs/what-are-my-reporting-obligations/
+- Financial Intelligence Centre, "The Financial Intelligence Centre":
+  https://www.fic.gov.za/about/
+- Financial Intelligence Centre, "FIC Annual Report 2024-2025":
+  https://www.fic.gov.za/document/fic-annual-report-2024-2025/
+- Financial Intelligence Centre, "Case studies: Money laundering typologies and
+  indicators":
+  https://www.fic.gov.za/document/case-studies-money-laundering-typologies-and-indicators/
+- Financial Intelligence Centre, "Case studies and indicators collection":
+  https://www.fic.gov.za/document/case-studies-and-indicators-collection/
+- Financial Intelligence Centre, "PCC 51: Guidance on measures relating to
+  FPPOs and DPIPs":
+  https://www.fic.gov.za/document/pcc-51-fppo-dpip/
+- Financial Intelligence Centre, "Crypto asset service providers":
+  https://www.fic.gov.za/accountable-institut/crypto-asset-service-providers/
+- Financial Intelligence Centre, "Estate agents and targeted financial
+  sanctions obligations," 2025:
+  https://www.fic.gov.za/2025/08/05/estate-agents-and-tfs/
+- Financial Intelligence Centre, "Motor vehicle dealers face financial crime
+  risks in the trade of high-value goods," 2025:
+  https://www.fic.gov.za/2025/10/22/motor-vehicle-dealers-fic-act-obligations/
+- Financial Intelligence Centre, "Drafting a risk management and compliance
+  programme," 2025:
+  https://www.fic.gov.za/2025/07/08/drafting-a-risk-management-and-compliance-programme/
+- Financial Intelligence Centre, "What are the beneficial ownership obligations
+  for business?", 2026:
+  https://www.fic.gov.za/2026/03/09/what-are-the-beneficial-ownership-obligations-for-business/
+- Financial Intelligence Centre, "National risk assessment: Terrorist financing
+  national risk assessment 2024":
+  https://www.fic.gov.za/document/national-risk-assessment-terrorist-financing-national-risk-assessment-2024/
+- South African Reserve Bank, "Payments Study Report 2023":
+  https://www.resbank.co.za/content/dam/sarb/publications/media-releases/2024/payments/SARB%20Payments%20Study%20Report%202023.pdf
+- South African Reserve Bank, "South African Reserve Bank Payments Study Report
+  Launch," 2024:
+  https://www.resbank.co.za/en/home/publications/publication-detail-pages/media-releases/2024/south-african-reserve-bank-payments-study-report-launch
+- South African Reserve Bank, "SARB Annual Report 2024/25":
+  https://www.resbank.co.za/en/home/publications/publication-detail-pages/reports/annual-reports/2025/sarb-2024-25
+- South African Reserve Bank Prudential Authority, "Sector risk assessment for
+  South Africa's banking sector (2022-2024)":
+  https://www.resbank.co.za/en/home/publications/publication-detail-pages/prudential-authority/pa-public-awareness/Communication/2025/sra-banks
+- Statistics South Africa, "Quarterly Labour Force Survey Q4: 2025 media
+  release":
+  https://www.statssa.gov.za/publications/P0211/Media%20Release%20QLFS%20Q4%202025.pdf
+- Statistics South Africa, "How informality shapes South Africa's employment
+  landscape," 2026:
+  https://www.statssa.gov.za/?p=19240
+- Statistics South Africa, "Survey of Employers and Self-Employed 2023":
+  https://isibaloweb.statssa.gov.za/pages/surveys/pss/sese/2023/sese2023.php
+- Statistics South Africa, "General Household Survey 2024 release":
+  https://www.gov.za/news/media-statements/statssa-releases-general-household-survey-2024-27-may-2025
+- Statistics South Africa, "Mid-year population estimates, 2025":
+  https://www.statssa.gov.za/?PPN=P0302&page_id=1854
+- Standard Bank, "Township Informal Economy Report newsroom summary," 2025:
+  https://www.standardbank.co.za/southafrica/news-and-media/newsroom/80-percent-of-township-businesses-unregistered-reveals-standard-bank-inaugural-informal-economy-report
+- World Bank, "Remittance Prices Worldwide data catalog":
+  https://datacatalog.worldbank.org/search/dataset/0037898/remittance-prices-worldwide
+- World Bank, "Remittance Prices Worldwide: South Africa to Zimbabwe corridor":
+  https://remittanceprices.worldbank.org/corridor/South-Africa/Zimbabwe
+- World Bank, "Remittance Prices Worldwide: South Africa to Lesotho corridor":
+  https://remittanceprices.worldbank.org/corridor/South%20Africa/Lesotho
+- Financial Action Task Force, "The FATF Recommendations":
+  https://www.fatf-gafi.org/en/publications/Fatfrecommendations/Fatf-recommendations.html
+- Financial Action Task Force, "Virtual Assets Red Flag Indicators of Money
+  Laundering and Terrorist Financing," 2020:
+  https://www.fatf-gafi.org/en/publications/Methodsandtrends/Virtual-assets-red-flag-indicators.html
+- Financial Action Task Force, "Guidance on Beneficial Ownership of Legal
+  Persons," 2023:
+  https://www.fatf-gafi.org/content/fatf-gafi/en/publications/Fatfrecommendations/Guidance-Beneficial-Ownership-Legal-Persons.html
+- Financial Action Task Force, "Guidance on Beneficial Ownership and
+  Transparency of Legal Arrangements," 2024:
+  https://www.fatf-gafi.org/content/fatf-gafi/en/publications/Fatfrecommendations/Guidance-Beneficial-Ownership-Transparency-Legal-Arrangements.html
+- Financial Action Task Force, "National money laundering and terrorist
+  financing risk assessment," 2013:
+  https://www.fatf-gafi.org/en/publications/Methodsandtrends/Nationalmoneylaunderingandterroristfinancingriskassessment.html
+- Financial Action Task Force, "Money Laundering National Risk Assessment
+  Guidance," 2025:
+  https://www.fatf-gafi.org/en/publications/Methodsandtrends/Money-Laundering-National-Risk-Assessment-Guidance.html
+- Judicial Commission of Inquiry into State Capture, "State Capture Report,
+  Part 1," 2022:
+  https://archive.parliament.gov.za/items/7342f38b-7749-49db-8a1d-10a742b73edc
+- United Nations Office on Drugs and Crime, "Estimating illicit financial flows
+  resulting from drug trafficking and other transnational organized crimes,"
+  2011:
+  https://unodc.org/documents/data-and-analysis/Studies/Illicit_financial_flows_2011_web.pdf
+- LexisNexis Risk Solutions, "Financial Crime in Africa White Paper," 2022:
+  https://risk.lexisnexis.com/global/en/insights-resources/white-paper/financial-crime-in-africa
+- IBM, "AMLSim: multi-agent simulator for anti-money laundering transaction
+  data":
+  https://github.com/IBM/AMLSim
+- Scientific Data, "A synthetic data set to benchmark anti-money laundering
+  methods," 2023:
+  https://www.nature.com/articles/s41597-023-02569-2
+- IBM Research and NeurIPS Datasets and Benchmarks, "Realistic Synthetic
+  Financial Transactions for Anti-Money Laundering Models," 2023:
+  https://proceedings.neurips.cc/paper_files/paper/2023/hash/5f38404edff6f3f642d6fa5892479c42-Abstract-Datasets_and_Benchmarks.html
+- B. Oztas, "Synthetic Transaction Monitoring Dataset AML (SAML-D)," Kaggle
+  dataset and ICEBE 2023 paper:
+  https://www.kaggle.com/datasets/berkanoztas/synthetic-transaction-monitoring-dataset-aml
+- M. Weber et al., "Scalable Graph Learning for Anti-Money Laundering: A First
+  Look," arXiv:1812.00076, 2018:
+  https://arxiv.org/abs/1812.00076
+- A. Pareja et al., "EvolveGCN: Evolving Graph Convolutional Networks for
+  Dynamic Graphs," AAAI, 2020:
+  https://arxiv.org/abs/1902.10191
+- The Alan Turing Institute, "Synthetic Data for Anti-Money Laundering":
+  https://www.turing.ac.uk/research/research-projects/synthetic-data-anti-money-laundering
+- The Presidency, "President Cyril Ramaphosa grants extension of Madlanga
+  Commission report deadline," 9 July 2026:
+  https://www.gov.za/news/media-statements/president-cyril-ramaphosa-grants-extension-madlanga-commission-report
+- Madlanga Commission public-record archive, "Day 74, 10 March 2026":
+  https://madlangacommission.co.za/hearings/day-74
+- Madlanga Commission public-record archive, "About the commission":
+  https://madlangacommission.co.za/about
