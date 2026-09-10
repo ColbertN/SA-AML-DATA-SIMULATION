@@ -46,28 +46,30 @@ province or country.
 
 ## Current Generated Run
 
-The latest saved run in the local results tables has the following summary:
+The latest saved run in the local results directory has the following summary:
 
 | Metric | Value |
 | --- | ---: |
 | Observation period | 2024-01-01 to 2026-03-31 |
 | Observation days | 821 |
 | Receiver accounts | 35,000 |
-| Transaction rows | 1,408,345 |
-| Average transactions per account | 40.24 |
+| Final simulation columns | 58 |
+| Full audit columns | 107 |
+| Transaction rows | 1,412,358 |
+| Average transactions per account | 40.35 |
 | Median transactions per account | 27 |
-| 95th percentile transactions per account | 125 |
+| 95th percentile transactions per account | 126 |
 | Maximum transactions per account | 220 |
-| Legitimate transaction rows | 1,391,618 |
-| Suspicious AML transaction rows | 16,727 |
-| Legitimate accounts | 31,498 |
-| Suspicious AML accounts | 3,502 |
-| Transaction-level suspicious share | 1.19% |
-| Account-level suspicious share | 10.01% |
+| Legitimate transaction rows | 1,381,844 |
+| Suspicious AML transaction rows | 30,514 |
+| Legitimate accounts | 31,000 |
+| Suspicious AML accounts | 4,000 |
+| Transaction-level suspicious share | 2.16% |
+| Account-level suspicious share | 11.43% |
 | AML scenarios represented | 22 |
 | Normal behaviour categories represented | 11 |
-| Cross-border transaction share | 14.35% |
-| FATF contextual exposure share | 5.51% |
+| Cross-border transaction share | 14.78% |
+| FATF contextual exposure share | 5.91% |
 
 Large generated datasets under `results/simulated_data/` are ignored by Git
 because full simulation files can exceed GitHub's normal file-size limit. They
@@ -89,6 +91,7 @@ can be regenerated from the notebook or scripts.
 |       |-- figure_pipeline.py
 |       |-- logging_utils.py
 |       |-- paths.py
+|       |-- schema.py
 |       |-- simulation_pipeline.py
 |-- results/
 |   |-- images/
@@ -103,13 +106,12 @@ can be regenerated from the notebook or scripts.
 |   |   |-- 08_informality/
 |   |   |-- 09_context_diagnostics/
 |   |-- simulated_data/
-|   |   |-- 01_full_saml/
-|   |   |-- 02_behaviour_only/
-|   |   |-- 03_final_results_excel/
-|   |   |-- 04_optional_engineered/
-|   |-- tables/
-|       |-- csv/
-|       |-- excel/
+|   |   |-- SA_SAML_D.csv
+|   |   |-- SA_SAML_D_schema.json
+|   |-- insights/
+|       |-- SA_SAML_D_final_results.xlsx
+|       |-- *.csv
+|       |-- feature_audit/
 |-- logs/
 |   |-- main_simulation/
 |   |-- figures/
@@ -129,7 +131,7 @@ seed, maximum transaction cap per account and suspicious transaction probability
 scale.
 
 `src/sa_aml_simulation/paths.py` creates the folder layout for data, figures,
-tables and logs. Script runs also write timestamped logs so the user can see
+insights and logs. Script runs also write timestamped logs so the user can see
 which phase is running and how long each run takes.
 
 ### 2. Account Population Generation
@@ -147,11 +149,12 @@ attributes as automatic suspiciousness.
 
 ### 3. Business, Informality And Cash Context
 
-The account generator then adds business and cash-context fields: cash intensity
-score, cash intensity band, informal business flag, business registration
-status, trading permit, VAT registration indicator, personal-account business
-use, premises type, estimated daily cash turnover, business age, business record
-keeping and bank loan access.
+The account generator uses a compact business-context representation in the
+clean export: `Informal_business_flag` and
+`Business_registration_status`. Detailed registration, premises, permit,
+turnover, record-keeping, loan-access and business-age fields remain internal
+simulation context or audit metadata rather than being repeated in the public
+analysis file.
 
 This stage is important because informal and unregistered business activity is a
 normal part of the South African retail environment. The simulator therefore
@@ -220,13 +223,17 @@ Each transaction receives structured payment and jurisdiction fields:
 transaction timestamp, sender account, receiver account, counterparty account,
 inflow/outflow direction, amount, currency, payment type, counterparty type,
 transaction purpose category, location context, cross-border flag, SADC corridor
-flag, jurisdiction risk tier, cash-threshold near-miss flag, rounded-amount
-flag, public-sector counterparty flag and PEP-related transaction flag.
+flag, jurisdiction risk tier and contextual indicators. Grant source, credit-card
+use, procurement context and virtual-asset context are represented as separate
+indicator fields rather than being hidden inside the payment rail.
 
-Payment rails include electronic transfer, RTC, PayShap, debit card, credit
-card, cash deposit, cash withdrawal, international wire, social grant,
-procurement EFT and crypto exchange off-ramp. The earlier "card acquiring"
-label has been removed.
+Payment rails include electronic transfer, RTC, PayShap, card payment, cash
+deposit, cash withdrawal, cheque and international wire. Social grants use the
+ordinary electronic-transfer rail and are identified by `Social_grant_indicator`
+and `Social_grant_type`. Credit-card use is identified by
+`Credit_card_indicator`, while procurement and virtual-asset activity use
+`Procurement_payment_indicator` and `Virtual_asset_transaction_indicator`.
+The earlier "card acquiring" label has been removed.
 
 ### 9. Raw Output Assembly
 
@@ -236,6 +243,117 @@ diagnostics. The main public raw output excludes downstream modelling-engineered
 features such as cyclical encodings, rolling sequence statistics, account
 aggregates, sequence-density fields and composite risk scores. Researchers can
 create their own engineered features from the raw simulation output.
+
+The behaviour-only export is the compact analysis view. It retains transaction
+identity, time, amount, payment and routing fields, neutral counterparty roles,
+KYC and socioeconomic context, geography, separate grant, credit, procurement
+and virtual-asset indicators, and `Laundering_type` for scenario interpretation.
+`Laundering_type`, `Scenario_detail`, `Scenario_reference_key` and
+`Is_laundering` are label-adjacent fields and must be excluded from model
+inputs; they are retained so users can audit and describe the simulated
+scenarios. The export excludes baseline behaviour labels,
+purpose metadata, internal activity multipliers, post-generation transaction
+counts, reproducible diagnostic flags and scores, first-observed dates, and
+duplicate fields such as age bands beside age, risk flags beside their
+categories, and debit-card flags beside the card rail and credit-card
+indicator. The full labelled export retains the complete validation metadata.
+
+The clean behaviour-only file is the recommended public analysis file. It
+contains simulation observations and the target/scenario labels, but no
+downstream sequence encodings, rolling statistics, account aggregates or
+composite risk scores. Researchers can derive those features from the retained
+raw fields for their own study design.
+
+### Final 58-Column Data Dictionary
+
+The final public file has exactly **58 columns**. The target and
+scenario-adjacent fields are retained for transparent evaluation and
+interpretation, but they must be excluded from predictive inputs when the task
+is to predict `Is_laundering`. The tables below are the authoritative field
+dictionary for the final export.
+
+#### Labels And Scenario Interpretation
+
+| Column | Meaning | Values or construction |
+| --- | --- | --- |
+| `Is_laundering` | Transaction-level ground-truth label generated by the simulator. | `0` legitimate baseline or `1` suspicious AML overlay. |
+| `Laundering_type` | Scenario family assigned to a suspicious account or transaction. | Scenario name for AML rows; non-AML rows are not assigned an AML type. |
+| `Scenario_reference_key` | Source and catalogue reference identifier for the simulated behaviour. | FIC/FATF/context source keys for AML rows; normal-behaviour source key for legitimate rows. |
+| `Scenario_detail` | Short plain-language description of the observable pattern. | Examples include repeated near-threshold cash deposits, rapid onward movement, or ordinary household spending. |
+
+#### Transaction Identity, Timing And Amount
+
+| Column | Meaning | Values or construction |
+| --- | --- | --- |
+| `Transaction_id` | Unique synthetic transaction identifier. | Sequential simulation identifier; not a bank-account number. |
+| `Time` | Time of day at which the transaction occurs. | `HH:MM:SS`; includes midnight salary/grant timing, working-day spending, and rapid AML episodes. |
+| `Date` | Calendar date of the transaction. | Date within the configured observation window. |
+| `Account_id` | Monitored receiver-account key used to group each account history. | Unique synthetic 9--11 digit account number. |
+| `Sender_account` | Account from which the transaction is sent. | Unique synthetic 9--11 digit account number; may be the monitored account or an external counterparty. |
+| `Receiver_account` | Account receiving the transaction. | Unique synthetic 9--11 digit account number; may be the monitored account or an external counterparty. |
+| `Counterparty_account` | Counterparty account associated with the monitored transaction. | Reused synthetic account numbers allow repeated counterparties and network patterns without real identifiers. |
+| `Direction` | Movement direction relative to the monitored account. | `Inflow` or `Outflow`. |
+| `Amount` | Transaction value in the relevant payment currency. | Positive simulated amount generated from profile, behaviour, timing, rail, and scenario distributions. |
+
+#### Payment Rails, Indicators And Jurisdiction
+
+| Column | Meaning | Values or construction |
+| --- | --- | --- |
+| `Payment_currency` | Currency associated with the sending side. | Country-linked currencies such as `ZAR`, `USD`, `BWP`, `LSL`, and `MZN`. |
+| `Received_currency` | Currency associated with the receiving side. | Country-linked currency; normally `ZAR` for domestic retail activity. |
+| `Sender_bank_location` | Synthetic location of the sending bank or account. | South Africa, SADC, other international, or FATF-context countries. |
+| `Receiver_bank_location` | Synthetic location of the receiving bank or account. | Same jurisdiction groups as the sender location. |
+| `Counterparty_country` | Country associated with the counterparty. | South Africa, SADC corridors, other relevant countries, or FATF-risk tiers. |
+| `Payment_type` | Operational payment rail only; it is not a scenario label. | `Cash Deposit`, `Cash Withdrawal`, `Electronic Transfer`, `RTC`, `PayShap`, `Card Payment`, `Cheque`, or `International Wire`. |
+| `Social_grant_indicator` | Indicates that the transaction is linked to a simulated social-grant flow. | `0` or `1`; grant activity uses ordinary payment rails. |
+| `Social_grant_type` | Grant programme category linked to the transaction when applicable. | `old_age`, `disability`, `care_dependency`, `foster_child`, `child_support`, `grant_in_aid`, `srd`, or `Not applicable`. |
+| `Credit_card_indicator` | Separates credit-card context from the operational card rail. | `0` or `1`; credit-card context can occur in either class. |
+| `Procurement_payment_indicator` | Indicates a simulated procurement-related payment context. | `0` or `1`; does not by itself imply laundering. |
+| `Virtual_asset_transaction_indicator` | Indicates a transaction associated with virtual-asset activity. | `0` or `1`; interpreted with payment and counterparty context. |
+| `Counterparty_type` | Neutral functional role of the counterparty. | Household/peer, retail customer, business customer, business supplier, employer/payroll, public sector/grant payer, foreign counterparty, financial service provider, savings group, or trade/logistics counterparty. Typology-coded names are not exposed here. |
+| `Cross_border_transaction` | Indicates whether the sending and receiving jurisdictions differ. | `0` domestic or `1` cross-border. |
+| `SADC_corridor_transaction` | Indicates use of a SADC-related corridor. | `0` or `1`; corridor membership is separate from suspiciousness. |
+| `Jurisdiction_risk_tier` | Contextual tier derived from simulated countries and FATF/SADC lists. | `Domestic`, `SADC corridor`, `Other international`, `FATF Increased Monitoring`, or `FATF Call for Action`. |
+
+#### Customer And Socioeconomic Profile
+
+| Column | Meaning | Values or construction |
+| --- | --- | --- |
+| `Customer_type` | Broad simulated retail or organisational customer segment. | `Formal Employee`, `Informal Trader`, `Grant Recipient`, `Cash-Intensive SME`, `Migrant Worker / Remittance User`, `Student / Youth Account`, `Public Sector Employee`, `Business Owner`, `Procurement Vendor`, `Corporate Entity`, or `NPO / Community Organisation`. |
+| `Employment_status` | Employment or livelihood status used to condition normal activity. | `Employed`, `Informal / Self-employed`, `Unemployed`, `Pensioner`, `Student`, `Business Owner`, `Business Entity`, or `NPO / Community`. |
+| `Employment_sector` | Sector associated with the customer profile. | Government, education, healthcare, retail, mining, construction, financial services, transport, informal retail, agriculture, legal/trust services, property, crypto/VASP, or import/export. |
+| `Monthly_income_estimate` | Synthetic monthly income or business-turnover estimate. | Positive ZAR estimate drawn from the profile income band; not an observed bank value. |
+| `Province` | South African province assigned to the monitored account. | Gauteng, KwaZulu-Natal, Eastern Cape, Western Cape, Limpopo, Mpumalanga, North West, Free State, or Northern Cape. |
+| `Grant_linked` | Account-level context indicating a grant-linked customer profile. | `0` or `1`; it does not imply a suspicious account. |
+| `Gender` | Synthetic demographic attribute. | `Female`, `Male`, or `Other / undisclosed`. |
+| `Age` | Synthetic age in years. | Integer age generated from customer and employment context. |
+| `Education_level` | Synthetic highest or current education category. | `Less than matric`, `Matric`, `Tertiary in progress`, `Other tertiary`, or `Graduate`. |
+| `Nationality_country` | Synthetic nationality or country association. | Predominantly South Africa, with regional and international countries represented. |
+| `Urban_rural` | Settlement context for the account profile. | `Metro / urban`, `Township / peri-urban`, `Small town`, or `Rural`. |
+| `Township_or_informal_settlement_flag` | Indicates township or informal-settlement context. | `0` or `1`, derived from settlement and provincial context. |
+| `Financial_inclusion_segment` | Synthetic access and usage segment. | `Banked digital`, `Banked cash-reliant`, `Thin-file / underbanked`, or `Grant-card dependent`. |
+| `Channel_preference` | Typical access channel for the customer profile. | Card-first, mobile-app-first, mixed cash/digital, branch/ATM cash, agent/cash/mobile, or remittance-app usage. |
+
+#### Business, Public-Sector And Risk Context
+
+| Column | Meaning | Values or construction |
+| --- | --- | --- |
+| `Informal_business_flag` | Indicates participation in an informal-business context. | `0` or `1`; legitimate informal trade is explicitly represented. |
+| `Business_registration_status` | Compact business-registration category. | `Not business`, `Registered`, `Unregistered informal`, or `Unregistered small business`. |
+| `Public_sector_exposure` | Contextual relationship to public-sector activity. | `0` or `1`; may describe legitimate employment or vendor exposure. |
+| `Procurement_vendor` | Indicates a simulated procurement-vendor relationship. | `0` or `1`; not a direct laundering label. |
+| `PEP_category` | Politically exposed-person context where applicable. | `Not PEP`, `Domestic prominent influential person`, `Foreign PEP`, or `PEP family or associate`. |
+| `Intermediary_account_flag` | Indicates intermediary or connected-account context. | `0` or `1`; contextual and not determinative. |
+| `Virtual_asset_exposure` | Account-level exposure to virtual-asset services. | `0` or `1`. |
+| `Connected_party_count` | Number of simulated connected-party relationships. | Non-negative integer generated from account context. |
+| `Profile_jurisdiction_risk_tier` | Risk tier of the account's typical foreign-counterparty profile. | Domestic, SADC corridor, other international, FATF increased monitoring, or FATF call for action. |
+| `Public_sector_counterparty` | Indicates a public-sector or grant-payer counterparty. | `0` or `1`; salary, grants, municipal services, and procurement can all appear here. |
+| `High_risk_sector_category` | Broad sector context used for risk-aware analysis. | Standard retail/household, cash-intensive informal economy, public procurement adjacent, property/real estate, motor vehicle/high-value goods, legal/professional intermediary, casino/gambling, precious metals/stones, import/export trade, crypto asset services, or NPO/community organisation. |
+| `High_risk_person_type` | Neutral profile-level person or exposure category. | Standard retail customer, public-sector financial-flow exposure, procurement/vendor exposure, domestic or foreign prominent public official, PEP family/associate, targeted-sanctions possible match, or adverse-media-only context. |
+| `Targeted_financial_sanctions_match` | Synthetic screening-context indicator. | `0` or `1`; it is not a transaction-level finding. |
+| `Adverse_media_flag` | Synthetic adverse-media screening context. | `0` or `1`; not proof of laundering. |
+| `Typical_foreign_counterparty_country` | Typical foreign corridor associated with the profile. | South Africa for domestic profiles, or selected SADC, international, and FATF-context countries. |
+| `Account_open_date` | Synthetic date on which the account was opened. | Date before or within the observation window, generated from lifecycle rules. |
 
 ### 10. Figures, Tables And Diagnostics
 
@@ -257,8 +375,20 @@ Image folders:
 - `08_informality`: informal and unregistered business behaviour
 - `09_context_diagnostics`: context-correlation diagnostics
 
-Insight tables are saved under `results/tables/csv/` and
-`results/tables/excel/`.
+Insight tables are saved as individual CSV files directly under `results/insights/`.
+The single consolidated workbook is
+`results/insights/SA_SAML_D_final_results.xlsx`.
+The column-level simulation dictionary is available at
+`results/insights/SA_SAML_D_data_dictionary.xlsx`; it includes each public
+column's group, meaning, derivation rule, data type, role, and observed
+categorical values.
+
+The final public schema contains exactly 58 columns, including the target and
+scenario-adjacent interpretation fields. The leakage audit examines the full
+internal audit export, while `final_schema_inventory.csv` documents all 58
+public columns. The schema dictionary records 45 categorical fields and 13
+numeric, temporal, or identifier fields; the target is separately marked and
+the internal audit retains the broader diagnostic view.
 
 ## AML Scenario Catalogue
 
@@ -316,14 +446,12 @@ The simulator includes demographic and socioeconomic fields because the South
 African AML problem is context-sensitive. These fields make the population
 inspectable and support later fairness, subgroup and false-positive analysis.
 
-Demographic coverage:
+Demographic coverage in the clean export:
 
-- age and age band
+- age
 - gender
 - education level
 - nationality
-- residency status
-- migrant-worker flag
 
 Geographic coverage:
 
@@ -374,7 +502,35 @@ easy to infer:
 - Transaction volume overlaps between legitimate and suspicious accounts.
 - The maximum transaction count is capped at 220 per account in the current
   configuration.
-- Payment type is not a deterministic label.
+- Payment type is an operational rail, not a scenario label. Grant, credit-card,
+  procurement and virtual-asset context are separate indicators.
+- `Counterparty_type` is retained as a broad economic role in the behaviour-only
+  export. Explicit scenario wording such as mule, victim, shell company and
+  FATF-monitored entity is removed from this field; those details remain only in
+  validation metadata and scenario documentation.
+- Business detail fields are reduced to `Informal_business_flag` and
+  `Business_registration_status`. Permit, VAT, premises, turnover, business-age,
+  record-keeping, loan-access and personal-account-use fields are excluded from
+  the clean export.
+- `High_risk_sector_category` and `High_risk_person_type` are retained as
+  contextual categories; their redundant binary flags are excluded.
+- Beneficial-ownership opacity is kept in the full audit metadata but excluded
+  from the clean export because it is a label-adjacent risk-control field rather
+  than an ordinary transaction observation.
+- Migration-worker and residency-status fields are excluded from the clean
+  export because they are difficult to verify consistently from ordinary bank
+  transaction records.
+- Amounts are drawn from a shared account- and rail-conditioned distribution for
+  both classes. Scenario templates influence the tail and relationships, rather
+  than creating a unique amount band.
+- Suspicious events occur in imperfect short episodes. Mule, pass-through and
+  related scenarios can produce directional sequences, while ordinary accounts
+  also retain rapid bursts, round amounts and occasional high-value payments.
+- `Is_laundering` is the target and `Laundering_type` is scenario metadata for
+  interpretation; neither is a permissible predictor.
+- PEP, public-sector, cash, cross-border and round-amount context can occur on
+  legitimate transactions. These fields should be interpreted with the
+  surrounding sequence rather than as automatic evidence of laundering.
 - Cross-border, cash-heavy, informal, grant-linked and high-risk-sector context
   are risk context, not automatic suspiciousness.
 - Free-text transaction descriptions are excluded from the raw modelling-ready
@@ -424,7 +580,7 @@ python scripts/save_figures.py
 Use a specific simulation CSV:
 
 ```powershell
-python scripts/save_figures.py --input-csv results/simulated_data/01_full_saml/SA_SAML_D.csv
+python scripts/save_figures.py --input-csv results/insights/feature_audit/SA_SAML_D_full_audit.csv
 ```
 
 Regenerate tables only:

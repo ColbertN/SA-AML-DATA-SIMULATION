@@ -2,11 +2,11 @@
 
 Examples
 --------
-Regenerate figures from the default full simulation CSV:
+Regenerate figures from the default internal audit source:
     python scripts/save_figures.py
 
-Use a specific CSV:
-    python scripts/save_figures.py --input-csv results/simulated_data/01_full_saml/SA_SAML_D.csv
+Use a specific audit CSV:
+    python scripts/save_figures.py --input-csv results/insights/feature_audit/SA_SAML_D_full_audit.csv
 """
 
 from __future__ import annotations

@@ -1,0 +1,14 @@
+metric,value
+Observation start,2024-01-01
+Observation end,2026-03-31
+Observation days,821
+Unique receiver accounts,35000
+Transactions,1412358
+Suspicious transaction share,0.0216
+Suspicious account share,0.1143
+AML scenarios represented,22
+Normal behaviour categories represented,11
+Median transactions per account,27
+95th percentile transactions per account,126
+Cross-border transaction share,0.1478
+FATF contextual exposure share,0.0591

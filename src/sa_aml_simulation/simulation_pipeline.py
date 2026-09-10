@@ -7,6 +7,7 @@ so the full data-generation workflow can be run without opening Jupyter.
 from __future__ import annotations
 
 import calendar
+import json
 import os
 import random
 import sys
@@ -37,15 +38,22 @@ from src.sa_aml_simulation.config import (
     DEFAULT_SUSPICIOUS_TX_PROB_SCALE,
 )
 from src.sa_aml_simulation.paths import (
-    BEHAVIOUR_ONLY_DIR,
     FINAL_RESULTS_DIR,
+    FEATURE_AUDIT_DIR,
     FULL_SAML_DIR,
-    OPTIONAL_ENGINEERED_DIR,
+    INSIGHTS_DIR,
     PROJECT_ROOT,
     SIMULATED_DATA_DIR as DEFAULT_SIMULATED_DATA_DIR,
     ensure_project_dirs,
 )
 from src.sa_aml_simulation.figure_helpers import finish_plot
+from src.sa_aml_simulation.schema import (
+    PUBLIC_CATEGORICAL_COLUMNS,
+    PUBLIC_COLUMN_DESCRIPTIONS,
+    PUBLIC_COLUMN_GROUPS,
+    PUBLIC_COLUMN_RULES,
+    PUBLIC_FINAL_COLUMNS,
+)
 
 
 def run_simulation() -> dict:
@@ -89,6 +97,25 @@ def run_simulation() -> dict:
 
     rng = np.random.default_rng(SEED)
     random.seed(SEED)
+
+    def random_bank_account_numbers(count: int, forbidden=None) -> np.ndarray:
+        """Return unique synthetic 9--11 digit bank-account numbers."""
+        lower = 100_000_000
+        upper = 100_000_000_000
+        seen = set(int(value) for value in (forbidden if forbidden is not None else ()))
+        values = []
+        while len(values) < count:
+            remaining = count - len(values)
+            candidates = rng.integers(lower, upper, size=max(remaining * 2, 1), dtype=np.int64)
+            for candidate in candidates:
+                value = int(candidate)
+                if value not in seen:
+                    seen.add(value)
+                    values.append(value)
+                    if len(values) == count:
+                        break
+        return np.asarray(values, dtype=np.int64)
+
     _progress(
         "Configuration loaded: "
         f"{N_RECEIVER_ACCOUNTS:,} accounts, {START_DATE.date()} to {END_DATE.date()}, "
@@ -157,10 +184,12 @@ def run_simulation() -> dict:
         "FATF Call for Action": 3,
     }
 
+    # Payment_type describes the operational rail only. Grant, credit-card,
+    # procurement and virtual-asset context are represented by separate fields
+    # so that a rail does not become a proxy for a scenario label.
     PAYMENT_TYPES = [
         "Cash Deposit", "Cash Withdrawal", "Electronic Transfer", "RTC", "PayShap",
-        "Debit Card", "Credit Card", "Cheque", "International Wire", "Social Grant",
-        "Procurement EFT", "Crypto Exchange Off-Ramp"
+        "Card Payment", "Cheque", "International Wire"
     ]
 
     LAUNDERING_TYPES = [
@@ -518,6 +547,70 @@ def run_simulation() -> dict:
     def lognormal_amount(median, sigma, min_value=10, max_value=5_000_000):
         value = rng.lognormal(mean=np.log(median), sigma=sigma)
         return float(np.clip(value, min_value, max_value))
+
+
+    def account_amount_anchor(acc):
+        """Return a broad customer-scale anchor shared by normal and AML rows."""
+        monthly_income = max(float(getattr(acc, "Monthly_income_estimate", 0) or 0), 0.0)
+        cash_turnover = max(float(getattr(acc, "Estimated_daily_cash_turnover", 0) or 0), 0.0) * 22.0
+        customer_floor = {
+            "Grant Recipient": 2_000.0,
+            "Student / Youth Account": 3_500.0,
+            "Informal Trader": 7_500.0,
+            "Cash-Intensive SME": 35_000.0,
+            "Business Owner": 42_000.0,
+            "Procurement Vendor": 55_000.0,
+            "Corporate Entity": 90_000.0,
+            "NPO / Community Organisation": 25_000.0,
+        }.get(getattr(acc, "Customer_type", ""), 4_000.0)
+        return max(monthly_income, cash_turnover, customer_floor, 1_000.0)
+
+
+    def shared_account_conditioned_amount(acc, direction, payment_type, requested_amount):
+        """Blend scenario amounts with a common, profile-conditioned distribution.
+
+        The scenario still influences the tail, but it no longer supplies a unique
+        amount band. This makes amount sequences informative without making one
+        transaction amount a near-deterministic label.
+        """
+        anchor = account_amount_anchor(acc)
+        rail_factor = {
+            "Cash Deposit": 0.20,
+            "Cash Withdrawal": 0.16,
+            "Card Payment": 0.045,
+            "PayShap": 0.055,
+            "RTC": 0.12,
+            "Electronic Transfer": 0.16,
+            "International Wire": 0.28,
+            "Cheque": 0.18,
+        }.get(payment_type, 0.10)
+        direction_factor = 1.15 if direction == "Inflow" else 0.72
+        shared_median = float(np.clip(anchor * rail_factor * direction_factor, 35.0, 85_000.0))
+        shared = lognormal_amount(
+            shared_median,
+            1.18,
+            10.0,
+            max(250_000.0, min(3_500_000.0, anchor * 28.0)),
+        )
+        requested = max(float(requested_amount), 10.0)
+        # Keep a wider tail for both classes. AML scenarios influence the tail,
+        # but the common draw remains the dominant component.
+        requested_weight = 0.28 if rng.random() < 0.18 else 0.16
+        blended = np.exp(
+            (1.0 - requested_weight) * np.log(shared) +
+            requested_weight * np.log(requested)
+        )
+        if rng.random() < 0.035:
+            blended = max(
+                blended,
+                lognormal_amount(
+                    shared_median * 3.2,
+                    1.10,
+                    500.0,
+                    max(350_000.0, anchor * 35.0),
+                ),
+            )
+        return float(np.clip(blended, 10.0, max(300_000.0, min(4_000_000.0, anchor * 40.0))))
 
 
     def round_currency(value):
@@ -1252,34 +1345,41 @@ def run_simulation() -> dict:
 
     def suspicious_gap_minutes(typology):
         if typology in RAPID_SUSPICIOUS_TYPOLOGIES:
-            return float(np.clip(rng.lognormal(np.log(12), 0.85), 2, 60))
+            return float(np.clip(rng.lognormal(np.log(24), 1.05), 3, 240))
         if typology in MODERATE_SUSPICIOUS_TYPOLOGIES:
-            return float(np.clip(rng.lognormal(np.log(45), 0.90), 5, 240))
+            return float(np.clip(rng.lognormal(np.log(75), 1.00), 5, 480))
         if typology in LAYERING_SUSPICIOUS_TYPOLOGIES:
-            return float(np.clip(rng.lognormal(np.log(240), 1.00), 20, 1440))
+            return float(np.clip(rng.lognormal(np.log(180), 1.05), 15, 1440))
         if typology in SLOW_SUSPICIOUS_TYPOLOGIES:
-            return float(np.clip(rng.lognormal(np.log(720), 1.05), 60, 4320))
-        return float(np.clip(rng.lognormal(np.log(180), 1.00), 15, 1440))
+            return float(np.clip(rng.lognormal(np.log(360), 1.10), 30, 4320))
+        return float(np.clip(rng.lognormal(np.log(180), 1.05), 15, 1440))
 
 
     def suspicious_cluster_probability(typology):
         if typology in RAPID_SUSPICIOUS_TYPOLOGIES:
-            return 0.84
+            return 0.62
         if typology in MODERATE_SUSPICIOUS_TYPOLOGIES:
-            return 0.70
+            return 0.55
         if typology in LAYERING_SUSPICIOUS_TYPOLOGIES:
-            return 0.54
+            return 0.48
         if typology in SLOW_SUSPICIOUS_TYPOLOGIES:
-            return 0.34
-        return 0.50
+            return 0.40
+        return 0.48
 
 
-    def sample_suspicious_datetime(acc, typology, previous_suspicious_datetime=None):
-        if previous_suspicious_datetime is not None and rng.random() < suspicious_cluster_probability(typology):
-            candidate = previous_suspicious_datetime + timedelta(minutes=suspicious_gap_minutes(typology))
-            active_start, active_end = account_active_datetime_bounds(acc)
-            if active_start <= candidate <= active_end:
-                return clamp_account_datetime(acc, candidate)
+    def sample_suspicious_datetime(acc, typology, previous_suspicious_datetime=None, burst=False):
+        if previous_suspicious_datetime is not None:
+            cluster_probability = 0.94 if burst else suspicious_cluster_probability(typology)
+            gap_minutes = (
+                float(np.clip(rng.lognormal(np.log(8), 0.65), 1, 30))
+                if burst
+                else suspicious_gap_minutes(typology)
+            )
+            if rng.random() < cluster_probability:
+                candidate = previous_suspicious_datetime + timedelta(minutes=gap_minutes)
+                active_start, active_end = account_active_datetime_bounds(acc)
+                if active_start <= candidate <= active_end:
+                    return clamp_account_datetime(acc, candidate)
 
         tx_datetime = sample_datetime(acc.Legitimate_behaviour, acc)
         if typology in RAPID_SUSPICIOUS_TYPOLOGIES and rng.random() < 0.30:
@@ -1289,6 +1389,61 @@ def run_simulation() -> dict:
                 second=int(rng.integers(0, 60)),
             )
         return clamp_account_datetime(acc, tx_datetime)
+
+
+    def build_scenario_counterparty_pools():
+        """Create latent endpoint pools for relationship-based typologies."""
+        return {
+            "inflow": [int(rng.integers(0, SENDER_POOL_SIZE)) for _ in range(5)],
+            "outflow": [int(rng.integers(0, SENDER_POOL_SIZE)) for _ in range(5)],
+        }
+
+
+    def choose_scenario_counterparty(typology, direction, pools):
+        if not pools:
+            return None
+        candidates = pools["inflow" if direction == "Inflow" else "outflow"]
+        if not candidates:
+            return None
+        if typology in {
+            "Ponzi / Investment Scheme Collections",
+            "Crypto Asset Off-Ramp",
+            "Procurement Corruption / Tender Kickback",
+            "Property / Real Estate Integration",
+        } and direction == "Outflow":
+            return candidates[0]
+        if typology in {
+            "Mule Account / Rapid Pass-Through",
+            "Fraudulent Company or Invoice Scam",
+            "Cybercrime Proceeds",
+            "Structuring / Smurfing Cash Deposits",
+            "Cash Courier / Bulk Cash Movement",
+        } and rng.random() < 0.70:
+            return candidates[0]
+        if rng.random() < 0.55:
+            return candidates[int(rng.integers(0, min(3, len(candidates))))]
+        return candidates[int(rng.integers(0, len(candidates)))]
+
+
+    def suspicious_episode_length(typology, remaining_transactions):
+        if typology in {
+            "Mule Account / Rapid Pass-Through",
+            "Cash Courier / Bulk Cash Movement",
+            "Cybercrime Proceeds",
+        } and remaining_transactions >= 60 and rng.random() < 0.18:
+            return int(min(remaining_transactions, rng.choice([40, 70, 100, 120])))
+        if typology in {
+            "Mule Account / Rapid Pass-Through",
+            "Cash Courier / Bulk Cash Movement",
+        }:
+            return int(rng.choice([2, 3, 5, 8, 12], p=[0.20, 0.28, 0.25, 0.18, 0.09]))
+        if typology in {
+            "Ponzi / Investment Scheme Collections",
+            "Fraudulent Company or Invoice Scam",
+            "Procurement Corruption / Tender Kickback",
+        }:
+            return int(rng.choice([2, 3, 5, 8], p=[0.28, 0.34, 0.26, 0.12]))
+        return int(rng.choice([1, 2, 3, 4], p=[0.42, 0.32, 0.18, 0.08]))
 
 
     # ============================================================
@@ -1305,8 +1460,9 @@ def run_simulation() -> dict:
     import time
     phase1_start = time.time()
 
+    receiver_account_numbers = random_bank_account_numbers(N_RECEIVER_ACCOUNTS)
     receiver_accounts = pd.DataFrame({
-        "Receiver_account": np.arange(N_RECEIVER_ACCOUNTS, dtype=int)
+        "Receiver_account": receiver_account_numbers
     })
     print(f"OK Base account table created")
 
@@ -1601,28 +1757,32 @@ def run_simulation() -> dict:
     # This is a profile-level probability, not the final transaction label. It gives
     # the simulation controllable account-level prevalence while still conditioning
     # on socioeconomic and institutional risk context.
+    # Context informs prevalence, but it must not act as a deterministic label.
+    # PEP status, cash intensity, informality, public-sector exposure and foreign
+    # links therefore have modest effects and remain present in both classes.
     profile_risk_score = (
-        0.010 +
-        0.024 * receiver_accounts["Cash_intensity_score"] +
-        0.018 * receiver_accounts["Has_cross_border_links"] +
-        0.038 * (receiver_accounts["Profile_jurisdiction_risk_tier"] == "FATF Increased Monitoring").astype(int) +
-        0.075 * (receiver_accounts["Profile_jurisdiction_risk_tier"] == "FATF Call for Action").astype(int) +
-        0.055 * receiver_accounts["Is_PEP"] +
-        0.040 * receiver_accounts["Procurement_vendor"] +
-        0.026 * receiver_accounts["Intermediary_account_flag"] +
-        0.022 * receiver_accounts["Virtual_asset_exposure"] +
-        0.022 * (receiver_accounts["Beneficial_ownership_opacity"] > 0.60).astype(int) +
-        0.014 * receiver_accounts["Informal_business_flag"] +
-        0.018 * receiver_accounts["Uses_personal_account_for_business"] +
-        0.022 * receiver_accounts["High_risk_sector_flag"] +
-        0.026 * receiver_accounts["High_risk_person_flag"] +
-        0.018 * (receiver_accounts["KYC_strength"].isin(["Weak / incomplete", "Enhanced required"])).astype(int) +
-        0.016 * (receiver_accounts["Account_age_days"] < 120).astype(int)
+        1.00 +
+        0.16 * receiver_accounts["Cash_intensity_score"] +
+        0.10 * receiver_accounts["Has_cross_border_links"] +
+        0.18 * (receiver_accounts["Profile_jurisdiction_risk_tier"] == "FATF Increased Monitoring").astype(int) +
+        0.28 * (receiver_accounts["Profile_jurisdiction_risk_tier"] == "FATF Call for Action").astype(int) +
+        0.13 * receiver_accounts["Is_PEP"] +
+        0.11 * receiver_accounts["Procurement_vendor"] +
+        0.08 * receiver_accounts["Intermediary_account_flag"] +
+        0.07 * receiver_accounts["Virtual_asset_exposure"] +
+        0.07 * (receiver_accounts["Beneficial_ownership_opacity"] > 0.60).astype(int) +
+        0.06 * receiver_accounts["Informal_business_flag"] +
+        0.06 * receiver_accounts["Uses_personal_account_for_business"] +
+        0.08 * receiver_accounts["High_risk_sector_flag"] +
+        0.09 * receiver_accounts["High_risk_person_flag"] +
+        0.06 * (receiver_accounts["KYC_strength"].isin(["Weak / incomplete", "Enhanced required"])).astype(int) +
+        0.05 * (receiver_accounts["Account_age_days"] < 120).astype(int)
     )
+    scaled_profile_risk = profile_risk_score / max(float(profile_risk_score.mean()), 1e-9)
     receiver_accounts["Account_laundering_probability"] = np.clip(
-        profile_risk_score * (AML_ACCOUNT_SHARE_TARGET / profile_risk_score.mean()),
-        0.001,
-        0.70
+        AML_ACCOUNT_SHARE_TARGET * (0.88 + 0.24 * scaled_profile_risk),
+        0.003,
+        0.32
     )
     receiver_accounts["Account_is_laundering"] = (
         rng.random(N_RECEIVER_ACCOUNTS) < receiver_accounts["Account_laundering_probability"]
@@ -1680,13 +1840,18 @@ def run_simulation() -> dict:
     # ============================================================
 
     SENDER_POOL_SIZE = max(80_000, N_RECEIVER_ACCOUNTS * 3)
-    EXTERNAL_ACCOUNT_OFFSET = SENDER_POOL_SIZE * 2
+    external_account_numbers = random_bank_account_numbers(
+        SENDER_POOL_SIZE,
+        forbidden=receiver_account_numbers,
+    )
 
     TX_COLUMNS = [
         "Transaction_id", "Time", "Date", "Account_id", "Sender_account", "Receiver_account",
         "Counterparty_account", "Direction", "Amount", "Payment_currency", "Received_currency",
         "Sender_bank_location", "Receiver_bank_location", "Counterparty_country", "Payment_type",
-        "Social_grant_type", "Counterparty_type", "Transaction_purpose_category", "Cross_border_transaction", "SADC_corridor_transaction", "Jurisdiction_risk_tier",
+        "Social_grant_indicator", "Social_grant_type", "Credit_card_indicator", "Debit_card_indicator",
+        "Procurement_payment_indicator", "Virtual_asset_transaction_indicator",
+        "Counterparty_type", "Transaction_purpose_category", "Cross_border_transaction", "SADC_corridor_transaction", "Jurisdiction_risk_tier",
         "Customer_type", "Employment_status", "Employment_sector", "Income_band", "Monthly_income_estimate",
         "Province", "Cash_intensity_score", "Cash_intensity_band", "Grant_linked", "Public_sector_exposure",
         "Procurement_vendor", "Is_PEP", "PEP_category", "Beneficial_ownership_opacity",
@@ -1697,14 +1862,19 @@ def run_simulation() -> dict:
         "PEP_related_transaction"
     ]
 
-    def account_endpoints(account_id, direction, sender_country, receiver_country):
-        counterparty_account = int(rng.integers(0, SENDER_POOL_SIZE))
+    def account_endpoints(account_id, direction, sender_country, receiver_country, counterparty_account_override=None):
+        counterparty_slot = (
+            int(counterparty_account_override)
+            if counterparty_account_override is not None
+            else int(rng.integers(0, SENDER_POOL_SIZE))
+        )
+        counterparty_account = int(external_account_numbers[counterparty_slot % SENDER_POOL_SIZE])
         if direction == "Inflow":
             sender_account = counterparty_account
             receiver_account = int(account_id)
         else:
             sender_account = int(account_id)
-            receiver_account = EXTERNAL_ACCOUNT_OFFSET + counterparty_account
+            receiver_account = counterparty_account
         return sender_account, receiver_account, counterparty_account
 
 
@@ -1714,7 +1884,7 @@ def run_simulation() -> dict:
                 "Household cash withdrawal", "Taxi fare or transport cash", "Grocery cash purchase",
                 "Airtime or data cash purchase", "Family support cash"
             ], [0.30, 0.22, 0.22, 0.16, 0.10])
-        if payment_type in ["Debit Card", "Credit Card"]:
+        if payment_type == "Card Payment":
             return draw_one([
                 "Grocery purchase", "Airtime or data purchase", "Fuel or transport purchase",
                 "Pharmacy or healthcare purchase", "Clothing or household goods", "School or education expense"
@@ -1736,17 +1906,13 @@ def run_simulation() -> dict:
         if direction == "Inflow":
             if payment_type == "Cash Deposit":
                 return "Daily cash takings deposit"
-            if payment_type == "Debit Card":
+            if payment_type == "Card Payment":
                 return "Customer card-sale settlement"
             if payment_type in ["PayShap", "Electronic Transfer", "RTC"]:
                 return "Customer payment receipt"
             return "Business customer receipt"
         if payment_type == "Cash Withdrawal":
             return draw_one(["Supplier cash purchase", "Wages or casual labour cash", "Business cash float withdrawal"], [0.45, 0.30, 0.25])
-        if payment_type == "Procurement EFT":
-            return "Procurement or contract payment"
-        if payment_type == "Crypto Exchange Off-Ramp":
-            return "Virtual asset exchange transfer"
         return draw_one(["Supplier payment", "Stock purchase", "Rent or premises cost", "Payroll or wages", "Transport or fuel cost"], [0.32, 0.24, 0.16, 0.16, 0.12])
 
 
@@ -1778,40 +1944,119 @@ def run_simulation() -> dict:
     def suspicious_purpose_category(typology, payment_type, counterparty_type):
         if payment_type in ["Cash Deposit", "Cash Withdrawal"]:
             return "Cash movement"
+        if payment_type == "Electronic Transfer" and counterparty_type in ["Public sector entity", "Connected vendor", "Subcontractor"]:
+            return "Procurement or supplier payment"
+        if payment_type == "Electronic Transfer" and counterparty_type == "Virtual asset service provider":
+            return "Virtual asset exchange transfer"
         if payment_type in ["International Wire", "Electronic Transfer", "RTC", "PayShap"]:
             return "Transfer or pass-through movement"
-        if payment_type == "Procurement EFT":
-            return "Procurement or supplier payment"
-        if payment_type == "Crypto Exchange Off-Ramp":
-            return "Virtual asset exchange transfer"
-        if payment_type in ["Debit Card", "Credit Card"]:
+        if payment_type == "Card Payment":
             return "Merchant or high-value goods payment"
         return "Scenario-related financial movement"
+
+
+    COUNTERPARTY_TYPE_NEUTRAL_MAP = {
+        "Family or remittance counterparty": "Household or peer counterparty",
+        "Supplier or household": "Household or business counterparty",
+        "Household or merchant": "Household or merchant",
+        "Retail merchant or peer": "Retail or peer counterparty",
+        "Township retail customer": "Retail customer",
+        "Informal customer": "Retail customer",
+        "Transport customer / taxi association": "Transport customer",
+        "Customer": "Business customer",
+        "Supplier": "Business supplier",
+        "Retail merchant": "Retail merchant",
+        "Debit order / service provider": "Financial service provider",
+        "Employer": "Employer or payroll counterparty",
+        "Payroll": "Employer or payroll counterparty",
+        "Trade counterparty": "Trade or logistics counterparty",
+        "Small business customer": "Business customer",
+        "Government grant payer": "Public sector or grant payer",
+        "Gig work or household": "Household or peer counterparty",
+        "Public sector entity": "Public sector counterparty",
+        "Stokvel or savings group": "Savings group",
+        "Stokvel / savings group": "Savings group",
+        "Cash courier or related individual": "Household or business counterparty",
+        "Cash-intensive retail front or courier": "Business supplier",
+        "Foreign counterparty or regional corridor account": "Foreign counterparty",
+        "Bulk cash courier or cash-intensive third party": "Household or business counterparty",
+        "Shell company, trust or opaque beneficial-owner entity": "Business customer",
+        "Municipal service provider": "Public or municipal service provider",
+        "FATF-monitored foreign counterparty": "Foreign counterparty",
+        "Peer or mule network account": "Peer or household counterparty",
+        "Virtual asset service provider": "Financial service provider",
+        "Intermediary, attorney trust or connected-party account": "Financial service provider",
+        "Cybercrime victim, mule or cash-out account": "Peer or household counterparty",
+        "Import/export or trade counterparty": "Trade or logistics counterparty",
+        "Retail investor or promoter account": "Business customer",
+        "Precious metals dealer or smuggling intermediary": "Retail merchant",
+        "Motor vehicle or high-value goods dealer": "Retail merchant",
+        "Student funding beneficiary, grant payer or mule": "Public sector or grant payer",
+        "Casino, betting wallet or gambling value instrument": "Retail merchant",
+        "Connected vendor": "Business supplier",
+        "Property practitioner, conveyancer or rental counterparty": "Business supplier",
+        "Donation, community organisation or foreign donor counterparty": "Business customer",
+        "Environmental commodity, logistics or export counterparty": "Trade or logistics counterparty",
+        "Subcontractor": "Business supplier",
+        "Victim company": "Business customer",
+        "Invoice-scam beneficiary": "Business customer",
+        "Rapid onward-payment account": "Peer or household counterparty",
+    }
+
+
+    def neutral_counterparty_type(counterparty_type):
+        return COUNTERPARTY_TYPE_NEUTRAL_MAP.get(
+            counterparty_type,
+            "Foreign counterparty" if "foreign" in str(counterparty_type).lower() else "Other counterparty",
+        )
 
 
     def finalise_transaction(acc, tx_id, tx_datetime, direction, amount, sender_country,
                              receiver_country, payment_type, counterparty_type,
                              transaction_purpose_category, is_laundering, laundering_type, behaviour_component,
                              typology_stage, suspicion_indicator, scenario_label,
-                             public_sector_counterparty=0, social_grant_type="Not applicable"):
+                             public_sector_counterparty=0, social_grant_type="Not applicable",
+                             credit_card_indicator=0, procurement_payment_indicator=0,
+                             virtual_asset_transaction_indicator=0,
+                             counterparty_account_override=None):
         sender_account, receiver_account, counterparty_account = account_endpoints(
-            acc.Receiver_account, direction, sender_country, receiver_country
+            acc.Receiver_account, direction, sender_country, receiver_country,
+            counterparty_account_override=counterparty_account_override,
         )
         risk_tier = combined_jurisdiction_tier(sender_country, receiver_country)
         cross_border = int(sender_country != receiver_country)
         sadc_corridor = int((sender_country in SADC_CORRIDORS) or (receiver_country in SADC_CORRIDORS))
         amount = round_currency(amount)
+        # Round values and near-threshold cash deposits occur in ordinary salary,
+        # business and household activity as well as in AML motifs. They are
+        # deliberately sampled before the flags are calculated so neither flag
+        # becomes a class-specific shortcut.
+        if rng.random() < 0.055:
+            amount = max(10.0, round(amount / 1000.0) * 1000.0)
+        if payment_type in ["Cash Deposit", "Cash Withdrawal"] and rng.random() < 0.018:
+            amount = round_currency(rng.uniform(40_000, 49_999.99))
+        social_grant_indicator = int(social_grant_type != "Not applicable")
+        credit_card_indicator = int(payment_type == "Card Payment" and (credit_card_indicator or rng.random() < 0.10))
+        debit_card_indicator = int(payment_type == "Card Payment" and credit_card_indicator == 0)
         ctr_near_miss = int(payment_type in ["Cash Deposit", "Cash Withdrawal"] and 40_000 <= amount <= 49_999.99)
         round_amount_flag = int(abs(amount % 1000) <= 0.01 or abs(amount % 1000 - 1000) <= 0.01)
-        pep_related = int(acc.Is_PEP == 1 or acc.Connected_party_count >= 4 or acc.PEP_category != "Not PEP")
+        # PEP or connected-party context can be relevant without making every
+        # transaction on that account PEP-related or suspicious.
+        pep_related = int(
+            (acc.Is_PEP == 1 or acc.Connected_party_count >= 4 or acc.PEP_category != "Not PEP")
+            and rng.random() < 0.45
+        )
         counterparty_country = sender_country if direction == "Inflow" else receiver_country
+        counterparty_type = neutral_counterparty_type(counterparty_type)
 
         return (
             int(tx_id), tx_datetime.time(), tx_datetime.date(), int(acc.Receiver_account),
             int(sender_account), int(receiver_account), int(counterparty_account), direction,
             amount, currency_for(sender_country), currency_for(receiver_country),
             sender_country, receiver_country, counterparty_country, payment_type,
-            social_grant_type, counterparty_type, transaction_purpose_category, cross_border, sadc_corridor, risk_tier,
+            social_grant_indicator, social_grant_type, credit_card_indicator, debit_card_indicator,
+            int(procurement_payment_indicator), int(virtual_asset_transaction_indicator),
+            counterparty_type, transaction_purpose_category, cross_border, sadc_corridor, risk_tier,
             acc.Customer_type, acc.Employment_status, acc.Employment_sector, acc.Income_band,
             float(acc.Monthly_income_estimate), acc.Province, float(acc.Cash_intensity_score),
             acc.Cash_intensity_band, int(acc.Grant_linked), int(acc.Public_sector_exposure),
@@ -1861,6 +2106,9 @@ def run_simulation() -> dict:
         sender_country = SA
         receiver_country = SA
         public_sector_counterparty = 0
+        credit_card_indicator = 0
+        procurement_payment_indicator = 0
+        virtual_asset_transaction_indicator = 0
         social_grant_type = "Not applicable"
 
         if behaviour == "Grant-linked inflows and survival payments":
@@ -1869,7 +2117,9 @@ def run_simulation() -> dict:
                 grant_type, tx_datetime = sample_social_grant_datetime(acc, spend=False)
                 social_grant_type = grant_type
                 amount = sample_social_grant_amount(acc, grant_type, tx_datetime.date())
-                payment_type = "Social Grant"
+                # Grants use the ordinary electronic-transfer rail; the source
+                # of funds is represented by Social_grant_indicator/type.
+                payment_type = "Electronic Transfer"
                 counterparty_type = "Government grant payer"
                 public_sector_counterparty = 1
             else:
@@ -1877,10 +2127,10 @@ def run_simulation() -> dict:
                 if rng.random() < 0.72:
                     social_grant_type, tx_datetime = sample_social_grant_datetime(acc, spend=True)
                     amount = lognormal_amount(360, 0.85, 25, 4200)
-                    payment_type = draw_one(["Cash Withdrawal", "Debit Card", "PayShap", "Electronic Transfer"], [0.44, 0.38, 0.13, 0.05])
+                    payment_type = draw_one(["Cash Withdrawal", "Card Payment", "PayShap", "Electronic Transfer"], [0.44, 0.38, 0.13, 0.05])
                 else:
                     amount = lognormal_amount(95, 0.78, 10, 1200)
-                    payment_type = draw_one(["Debit Card", "PayShap", "Cash Withdrawal"], [0.42, 0.34, 0.24])
+                    payment_type = draw_one(["Card Payment", "PayShap", "Cash Withdrawal"], [0.42, 0.34, 0.24])
                 counterparty_type = "Retail merchant"
 
         elif behaviour in ["Informal registered business cash cycle", "Informal unregistered business cash cycle", "Spaza / township retail cash cycle", "Taxi or transport cash cycle"]:
@@ -1904,11 +2154,11 @@ def run_simulation() -> dict:
             if rng.random() < inflow_weight:
                 direction = "Inflow"
                 amount = lognormal_amount(median_in, 0.98, 25, 45_000)
-                payment_type = draw_one(["Cash Deposit", "Debit Card", "PayShap", "Electronic Transfer"], [0.50, 0.20, 0.20, 0.10])
+                payment_type = draw_one(["Cash Deposit", "Card Payment", "PayShap", "Electronic Transfer"], [0.50, 0.20, 0.20, 0.10])
             else:
                 direction = "Outflow"
                 amount = lognormal_amount(median_out, 1.02, 20, 35_000)
-                payment_type = draw_one(["Cash Withdrawal", "Electronic Transfer", "Debit Card", "PayShap"], [0.45, 0.25, 0.20, 0.10])
+                payment_type = draw_one(["Cash Withdrawal", "Electronic Transfer", "Card Payment", "PayShap"], [0.45, 0.25, 0.20, 0.10])
                 counterparty_type = "Supplier or household"
 
         elif behaviour == "Remittance corridor activity":
@@ -1932,20 +2182,26 @@ def run_simulation() -> dict:
         elif behaviour == "Low-value high-frequency retail payments":
             direction = draw_one(["Inflow", "Outflow"], [0.22, 0.78])
             amount = lognormal_amount(150, 0.90, 10, 3500)
-            payment_type = draw_one(["Debit Card", "PayShap", "Cash Withdrawal", "Electronic Transfer"], [0.45, 0.30, 0.15, 0.10])
+            payment_type = draw_one(["Card Payment", "PayShap", "Cash Withdrawal", "Electronic Transfer"], [0.45, 0.30, 0.15, 0.10])
             counterparty_type = "Retail merchant or peer"
 
         elif behaviour == "Business operating payments":
             direction = draw_one(["Inflow", "Outflow"], [0.52, 0.48])
             amount = lognormal_amount(8500, 1.05, 120, 260_000)
-            payment_type = draw_one(["Electronic Transfer", "RTC", "Debit Card", "Cash Deposit", "International Wire"], [0.48, 0.18, 0.17, 0.12, 0.05])
+            payment_type = draw_one(["Electronic Transfer", "RTC", "Card Payment", "Cash Deposit", "International Wire"], [0.48, 0.18, 0.17, 0.12, 0.05])
             counterparty_type = draw_one(["Customer", "Supplier", "Payroll", "Trade counterparty"], [0.38, 0.35, 0.15, 0.12])
-            if (acc.Procurement_vendor or acc.Public_sector_exposure) and rng.random() < 0.10:
-                payment_type = "Procurement EFT"
+            if (acc.Procurement_vendor or acc.Public_sector_exposure) and rng.random() < 0.18:
+                payment_type = "Electronic Transfer"
+                procurement_payment_indicator = 1
                 counterparty_type = draw_one(["Public sector entity", "Supplier", "Municipal service provider"], [0.45, 0.35, 0.20])
                 public_sector_counterparty = int(counterparty_type in ["Public sector entity", "Municipal service provider"])
-            elif acc.Virtual_asset_exposure and rng.random() < 0.05:
-                payment_type = "Crypto Exchange Off-Ramp"
+            elif rng.random() < 0.025:
+                payment_type = "Electronic Transfer"
+                procurement_payment_indicator = 1
+                counterparty_type = draw_one(["Supplier", "Municipal service provider", "Trade counterparty"], [0.45, 0.25, 0.30])
+            elif acc.Virtual_asset_exposure and rng.random() < 0.15:
+                payment_type = "Electronic Transfer"
+                virtual_asset_transaction_indicator = 1
                 counterparty_type = "Virtual asset service provider"
             if rng.random() < 0.06 and acc.Has_cross_border_links:
                 foreign_country = choose_transaction_country(acc, force_foreign=True, suspicious=False)
@@ -1974,20 +2230,23 @@ def run_simulation() -> dict:
                 elif salary_spend_roll < 0.62:
                     tx_datetime = sample_salary_pay_cycle_datetime(acc, day_shift_max=4, timing="spend")
                     amount = lognormal_amount(760, 0.95, 35, 28_000)
-                    payment_type = draw_one(["Debit Card", "Cash Withdrawal", "Electronic Transfer", "PayShap", "Credit Card"], [0.38, 0.24, 0.18, 0.14, 0.06])
+                    payment_type = draw_one(["Card Payment", "Cash Withdrawal", "Electronic Transfer", "PayShap"], [0.38, 0.24, 0.18, 0.14])
+                    credit_card_indicator = int(payment_type == "Card Payment" and rng.random() < 0.16)
                     counterparty_type = "Household or merchant"
                 else:
                     amount = lognormal_amount(170, 0.82, 10, 3500) if rng.random() < 0.62 else lognormal_amount(420, 0.95, 20, 12_000)
-                    payment_type = draw_one(["Debit Card", "PayShap", "Cash Withdrawal", "Electronic Transfer", "Credit Card"], [0.42, 0.26, 0.16, 0.10, 0.06])
+                    payment_type = draw_one(["Card Payment", "PayShap", "Cash Withdrawal", "Electronic Transfer"], [0.42, 0.26, 0.16, 0.10])
+                    credit_card_indicator = int(payment_type == "Card Payment" and rng.random() < 0.16)
                     counterparty_type = "Household or merchant"
 
         else:
             direction = draw_one(["Inflow", "Outflow"], [0.46, 0.54])
             amount = lognormal_amount(650, 1.10, 20, 18_000)
-            payment_type = draw_one(["Cash Deposit", "Cash Withdrawal", "PayShap", "Electronic Transfer", "Debit Card"], [0.24, 0.26, 0.24, 0.16, 0.10])
+            payment_type = draw_one(["Cash Deposit", "Cash Withdrawal", "PayShap", "Electronic Transfer", "Card Payment"], [0.24, 0.26, 0.24, 0.16, 0.10])
             counterparty_type = "Gig work or household"
 
         amount = maybe_add_legitimate_high_value_tail(amount, behaviour, direction, acc)
+        amount = shared_account_conditioned_amount(acc, direction, payment_type, amount)
 
         transaction_purpose_category = legitimate_purpose_category(
             behaviour, direction, payment_type, counterparty_type
@@ -1999,50 +2258,43 @@ def run_simulation() -> dict:
             0, "Normal", "legitimate_socioeconomic",
             "Legitimate", "Normal socioeconomic behaviour", behaviour,
             public_sector_counterparty=public_sector_counterparty,
-            social_grant_type=social_grant_type
+            social_grant_type=social_grant_type,
+            credit_card_indicator=credit_card_indicator,
+            procurement_payment_indicator=procurement_payment_indicator,
+            virtual_asset_transaction_indicator=virtual_asset_transaction_indicator,
         )
 
-    LOW_VALUE_OVERLAP_TYPOLOGIES = {
-        "Mule Account / Rapid Pass-Through", "Cybercrime Proceeds",
-        "Ponzi / Investment Scheme Collections", "Stolen Student Loan or Grant Abuse",
-        "Crypto Asset Off-Ramp", "Fraudulent Company or Invoice Scam"
-    }
-    MEDIUM_VALUE_OVERLAP_TYPOLOGIES = {
-        "Cross-Border Layering via SADC Corridor", "High-Risk Jurisdiction Layering",
-        "Intermediary / Trust Account Abuse", "NPO / Community Organisation Misuse",
-        "Narcotics Cash Proceeds", "Casino or Gambling Laundering"
-    }
-    HIGH_VALUE_INTEGRATION_TYPOLOGIES = {
-        "Procurement Corruption / Tender Kickback", "Shell or Front Company Flow",
-        "Complex Legal Structure / Beneficial Ownership Obfuscation",
-        "Illegal Gold or Precious Metals", "Environmental or Wildlife Crime Proceeds",
-        "Property / Real Estate Integration", "Motor Vehicle or High-Value Goods Purchase",
-        "Trade-Based Import-Export Layering"
-    }
-
-
-    def maybe_add_suspicious_amount_overlap(amount, typology):
-        """Keep AML typologies realistic while reducing amount-only separability."""
-        if typology in LOW_VALUE_OVERLAP_TYPOLOGIES and rng.random() < 0.64:
-            return min(float(amount), lognormal_amount(2_600, 1.05, 80, 45_000))
-        if typology in MEDIUM_VALUE_OVERLAP_TYPOLOGIES and rng.random() < 0.48:
-            return min(float(amount), lognormal_amount(7_500, 1.08, 250, 95_000))
-        if typology in HIGH_VALUE_INTEGRATION_TYPOLOGIES and rng.random() < 0.24:
-            return min(float(amount), lognormal_amount(18_000, 1.05, 900, 180_000))
-        return float(amount)
-
-
-    def generate_suspicious_transaction(acc, tx_id, tx_datetime=None):
+    def generate_suspicious_transaction(
+        acc,
+        tx_id,
+        tx_datetime=None,
+        episode_step=0,
+        prior_suspicious_direction=None,
+        prior_suspicious_amount=None,
+        episode_anchor_amount=None,
+        scenario_counterparty_pools=None,
+        burst=False,
+    ):
         typology = acc.Laundering_type
         if tx_datetime is None:
-            tx_datetime = sample_suspicious_datetime(acc, typology)
+            tx_datetime = sample_suspicious_datetime(acc, typology, burst=burst)
         sender_country = SA
         receiver_country = SA
         public_sector_counterparty = 0
+        credit_card_indicator = 0
+        procurement_payment_indicator = 0
+        virtual_asset_transaction_indicator = 0
+        social_grant_type = "Not applicable"
 
         if typology == "Structuring / Smurfing Cash Deposits":
             direction = "Inflow"
-            amount = rng.uniform(40_000, 49_999.99)
+            # Near-threshold deposits are one possible motif, not the entire
+            # scenario. Other rows use a wider cash distribution.
+            amount = (
+                rng.uniform(38_000, 52_000)
+                if rng.random() < 0.38
+                else lognormal_amount(22_000, 1.05, 250, 85_000)
+            )
             payment_type = "Cash Deposit"
             counterparty_type = "Cash courier or related individual"
 
@@ -2053,7 +2305,12 @@ def run_simulation() -> dict:
             counterparty_type = "Bulk cash courier or cash-intensive third party"
 
         elif typology == "Mule Account / Rapid Pass-Through":
-            direction = draw_one(["Inflow", "Outflow"], [0.57, 0.43])
+            if episode_step > 0 and prior_suspicious_direction == "Inflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.22, 0.78])
+            elif episode_step > 0 and prior_suspicious_direction == "Outflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.68, 0.32])
+            else:
+                direction = draw_one(["Inflow", "Outflow"], [0.57, 0.43])
             amount = lognormal_amount(3800, 1.05, 120, 65_000)
             payment_type = draw_one(["PayShap", "RTC", "Electronic Transfer", "Cash Withdrawal"], [0.34, 0.26, 0.25, 0.15])
             counterparty_type = "Peer or mule network account"
@@ -2065,7 +2322,12 @@ def run_simulation() -> dict:
                     receiver_country = foreign_country
 
         elif typology == "Cross-Border Layering via SADC Corridor":
-            direction = draw_one(["Inflow", "Outflow"], [0.52, 0.48])
+            if episode_step > 0 and prior_suspicious_direction == "Inflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.32, 0.68])
+            elif episode_step > 0 and prior_suspicious_direction == "Outflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.64, 0.36])
+            else:
+                direction = draw_one(["Inflow", "Outflow"], [0.52, 0.48])
             amount = lognormal_amount(19_000, 1.20, 500, 650_000)
             payment_type = draw_one(["International Wire", "Electronic Transfer", "RTC"], [0.62, 0.24, 0.14])
             counterparty_type = "Foreign counterparty or regional corridor account"
@@ -2101,7 +2363,8 @@ def run_simulation() -> dict:
         elif typology == "Procurement Corruption / Tender Kickback":
             direction = draw_one(["Inflow", "Outflow"], [0.68, 0.32])
             amount = float(rng.choice([18_000, 32_000, 45_000, 49_500, 75_000, 120_000])) if rng.random() < 0.54 else lognormal_amount(95_000, 1.05, 8_000, 1_500_000)
-            payment_type = draw_one(["Procurement EFT", "Electronic Transfer", "RTC"], [0.66, 0.26, 0.08])
+            payment_type = draw_one(["Electronic Transfer", "RTC"], [0.74, 0.26])
+            procurement_payment_indicator = 1
             counterparty_type = draw_one(["Public sector entity", "Connected vendor", "Subcontractor"], [0.50, 0.28, 0.22])
             public_sector_counterparty = int(counterparty_type == "Public sector entity" or direction == "Inflow")
 
@@ -2120,7 +2383,8 @@ def run_simulation() -> dict:
         elif typology == "Crypto Asset Off-Ramp":
             direction = draw_one(["Inflow", "Outflow"], [0.72, 0.28])
             amount = lognormal_amount(17_000, 0.95, 1_500, 140_000)
-            payment_type = "Crypto Exchange Off-Ramp"
+            payment_type = draw_one(["Electronic Transfer", "International Wire"], [0.78, 0.22])
+            virtual_asset_transaction_indicator = 1
             counterparty_type = "Virtual asset service provider"
             if rng.random() < 0.35:
                 foreign_country = draw_one(["South Africa", "Seychelles", "United Arab Emirates", "Kenya", "Namibia"], [0.45, 0.12, 0.18, 0.15, 0.10])
@@ -2130,19 +2394,30 @@ def run_simulation() -> dict:
                     receiver_country = foreign_country
 
         elif typology == "Ponzi / Investment Scheme Collections":
-            direction = draw_one(["Inflow", "Outflow"], [0.74, 0.26])
+            if episode_step > 0 and prior_suspicious_direction == "Inflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.42, 0.58])
+            elif episode_step > 0 and prior_suspicious_direction == "Outflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.70, 0.30])
+            else:
+                direction = draw_one(["Inflow", "Outflow"], [0.74, 0.26])
             amount = lognormal_amount(6200, 0.95, 500, 120_000)
             payment_type = draw_one(["Electronic Transfer", "RTC", "Cash Deposit"], [0.46, 0.34, 0.20])
             counterparty_type = "Retail investor or promoter account"
 
         elif typology == "Fraudulent Company or Invoice Scam":
-            direction = draw_one(["Inflow", "Outflow"], [0.60, 0.40])
+            if episode_step > 0 and prior_suspicious_direction == "Inflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.30, 0.70])
+            else:
+                direction = draw_one(["Inflow", "Outflow"], [0.60, 0.40])
             amount = lognormal_amount(18_000, 1.10, 800, 420_000)
             payment_type = draw_one(["Electronic Transfer", "RTC", "International Wire"], [0.55, 0.34, 0.11])
             counterparty_type = draw_one(["Victim company", "Invoice-scam beneficiary", "Rapid onward-payment account"], [0.36, 0.34, 0.30])
 
         elif typology == "Cybercrime Proceeds":
-            direction = draw_one(["Inflow", "Outflow"], [0.58, 0.42])
+            if episode_step > 0 and prior_suspicious_direction == "Inflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.28, 0.72])
+            else:
+                direction = draw_one(["Inflow", "Outflow"], [0.58, 0.42])
             amount = lognormal_amount(4800, 1.00, 100, 95_000)
             payment_type = draw_one(["PayShap", "RTC", "Electronic Transfer", "Cash Withdrawal"], [0.36, 0.28, 0.24, 0.12])
             counterparty_type = "Cybercrime victim, mule or cash-out account"
@@ -2180,14 +2455,16 @@ def run_simulation() -> dict:
         elif typology == "Stolen Student Loan or Grant Abuse":
             direction = draw_one(["Inflow", "Outflow"], [0.56, 0.44])
             amount = lognormal_amount(3200, 0.90, 200, 55_000)
-            payment_type = draw_one(["Electronic Transfer", "PayShap", "Cash Withdrawal", "Debit Card"], [0.34, 0.30, 0.24, 0.12])
+            payment_type = draw_one(["Electronic Transfer", "PayShap", "Cash Withdrawal", "Card Payment"], [0.34, 0.30, 0.24, 0.12])
+            credit_card_indicator = int(payment_type == "Card Payment" and rng.random() < 0.18)
             counterparty_type = "Student funding beneficiary, grant payer or mule"
             public_sector_counterparty = int(direction == "Inflow" and rng.random() < 0.44)
 
         elif typology == "Casino or Gambling Laundering":
             direction = draw_one(["Inflow", "Outflow"], [0.50, 0.50])
             amount = lognormal_amount(15_000, 1.10, 500, 260_000)
-            payment_type = draw_one(["Cash Deposit", "Cash Withdrawal", "Electronic Transfer", "Debit Card"], [0.30, 0.24, 0.30, 0.16])
+            payment_type = draw_one(["Cash Deposit", "Cash Withdrawal", "Electronic Transfer", "Card Payment"], [0.30, 0.24, 0.30, 0.16])
+            credit_card_indicator = int(payment_type == "Card Payment" and rng.random() < 0.18)
             counterparty_type = "Casino, betting wallet or gambling value instrument"
 
         elif typology == "Property / Real Estate Integration":
@@ -2234,7 +2511,41 @@ def run_simulation() -> dict:
         else:
             return generate_legitimate_transaction(acc, tx_id)
 
-        amount = maybe_add_suspicious_amount_overlap(amount, typology)
+        # Typology-specific amount continuity is deliberately soft. Ponzi and
+        # invoice collections can repeat contribution/invoice scales, while
+        # mule and cash-courier episodes can pass on comparable amounts. The
+        # common amount process remains dominant so one row is not a label.
+        if episode_anchor_amount is not None and typology in {
+            "Ponzi / Investment Scheme Collections",
+            "Fraudulent Company or Invoice Scam",
+            "Structuring / Smurfing Cash Deposits",
+        }:
+            amount = float(np.exp(
+                0.52 * np.log(max(float(episode_anchor_amount), 10.0)) +
+                0.48 * np.log(max(float(amount), 10.0)) +
+                rng.normal(0.0, 0.10)
+            ))
+        elif prior_suspicious_amount is not None and typology in {
+            "Mule Account / Rapid Pass-Through",
+            "Cybercrime Proceeds",
+            "Cash Courier / Bulk Cash Movement",
+        } and episode_step > 0:
+            amount = float(np.exp(
+                0.38 * np.log(max(float(prior_suspicious_amount), 10.0)) +
+                0.62 * np.log(max(float(amount), 10.0)) +
+                rng.normal(0.0, 0.16)
+            ))
+
+        # Credit use is a normal operational possibility, including on an AML
+        # account. It is sampled across ordinary transfer-like scenario rows so
+        # it cannot identify a particular typology by itself.
+        if payment_type in ["Electronic Transfer", "RTC", "PayShap"] and rng.random() < 0.06:
+            payment_type = "Card Payment"
+            credit_card_indicator = 1
+
+        # Retain the scenario's broad scale while sharing the same customer- and
+        # rail-conditioned amount process used by legitimate transactions.
+        amount = shared_account_conditioned_amount(acc, direction, payment_type, amount)
 
         transaction_purpose_category = suspicious_purpose_category(typology, payment_type, counterparty_type)
         scenario_meta = AML_SCENARIO_CATALOG.get(typology, {})
@@ -2245,7 +2556,18 @@ def run_simulation() -> dict:
             scenario_meta.get("stage", "Layering"),
             scenario_meta.get("indicator", "Scenario-specific suspicious behaviour"),
             typology,
-            public_sector_counterparty=public_sector_counterparty
+            public_sector_counterparty=public_sector_counterparty,
+            social_grant_type=(
+                sample_social_grant_type(acc)
+                if typology == "Stolen Student Loan or Grant Abuse" and rng.random() < 0.35
+                else "Not applicable"
+            ),
+            credit_card_indicator=credit_card_indicator,
+            procurement_payment_indicator=procurement_payment_indicator,
+            virtual_asset_transaction_indicator=virtual_asset_transaction_indicator,
+            counterparty_account_override=choose_scenario_counterparty(
+                typology, direction, scenario_counterparty_pools
+            ),
         )
 
 
@@ -2270,22 +2592,111 @@ def run_simulation() -> dict:
         forced_suspicious_position = int(rng.integers(0, n_tx)) if acc.Account_is_laundering and n_tx > 0 else -1
         previous_legitimate_datetime = None
         previous_suspicious_datetime = None
+        suspicious_episode_remaining = 0
+        suspicious_episode_step = 0
+        prior_suspicious_direction = None
+        prior_suspicious_amount = None
+        episode_anchor_amount = None
+        burst_remaining = 0
+        scenario_counterparty_pools = build_scenario_counterparty_pools()
 
         for tx_number in range(n_tx):
+            burst_start = bool(
+                acc.Account_is_laundering
+                and burst_remaining == 0
+                and suspicious_episode_remaining == 0
+                and tx_number < n_tx - 1
+                and acc.Laundering_type in {
+                    "Mule Account / Rapid Pass-Through",
+                    "Cash Courier / Bulk Cash Movement",
+                    "Cybercrime Proceeds",
+                }
+                and n_tx >= 60
+                and rng.random() < 0.18
+            )
+            if burst_start:
+                burst_remaining = suspicious_episode_length(acc.Laundering_type, n_tx - tx_number)
+                suspicious_episode_remaining = burst_remaining
+                suspicious_episode_step = 0
+                prior_suspicious_direction = None
+                prior_suspicious_amount = None
+                episode_anchor_amount = None
+
             force_suspicious_for_account = bool(
                 acc.Account_is_laundering and tx_number == forced_suspicious_position
             )
+            if suspicious_episode_remaining > 0:
+                episode_probability = min(
+                    0.42,
+                    max(0.12, suspicious_tx_probability * 2.6),
+                )
+            else:
+                episode_probability = suspicious_tx_probability
+            # A small number of accounts start an additional latent episode. The
+            # episode state is intentionally not exported as a feature; it shapes
+            # the observable order, timing and direction of ordinary-looking rows.
+            start_episode = bool(
+                acc.Account_is_laundering and
+                suspicious_episode_remaining == 0 and
+                rng.random() < 0.025
+            )
             is_suspicious_tx = bool(
-                force_suspicious_for_account or (acc.Account_is_laundering and rng.random() < suspicious_tx_probability)
+                burst_remaining > 0 or
+                force_suspicious_for_account or
+                start_episode or
+                (acc.Account_is_laundering and rng.random() < episode_probability)
             )
             if is_suspicious_tx:
-                tx_datetime = sample_suspicious_datetime(acc, acc.Laundering_type, previous_suspicious_datetime)
+                current_burst = burst_remaining > 0
+                if suspicious_episode_remaining == 0:
+                    suspicious_episode_remaining = suspicious_episode_length(
+                        acc.Laundering_type, n_tx - tx_number
+                    )
+                    suspicious_episode_step = 0
+                    prior_suspicious_amount = None
+                    episode_anchor_amount = None
+                tx_datetime = sample_suspicious_datetime(
+                    acc,
+                    acc.Laundering_type,
+                    previous_suspicious_datetime,
+                    burst=current_burst,
+                )
                 previous_suspicious_datetime = tx_datetime
-                transactions.append(generate_suspicious_transaction(acc, tx_id, tx_datetime=tx_datetime))
+                transactions.append(
+                    generate_suspicious_transaction(
+                        acc,
+                        tx_id,
+                        tx_datetime=tx_datetime,
+                        episode_step=suspicious_episode_step,
+                        prior_suspicious_direction=prior_suspicious_direction,
+                        prior_suspicious_amount=prior_suspicious_amount,
+                        episode_anchor_amount=episode_anchor_amount,
+                        scenario_counterparty_pools=scenario_counterparty_pools,
+                        burst=current_burst,
+                    )
+                )
+                prior_suspicious_direction = transactions[-1][7]
+                prior_suspicious_amount = transactions[-1][8]
+                if episode_anchor_amount is None:
+                    episode_anchor_amount = transactions[-1][8]
+                suspicious_episode_step += 1
+                if current_burst:
+                    burst_remaining = max(0, burst_remaining - 1)
+                    suspicious_episode_remaining = burst_remaining
+                else:
+                    suspicious_episode_remaining = max(0, suspicious_episode_remaining - 1)
             else:
                 tx_datetime = sample_legitimate_datetime(acc, previous_legitimate_datetime)
                 previous_legitimate_datetime = tx_datetime
                 transactions.append(generate_legitimate_transaction(acc, tx_id, tx_datetime=tx_datetime))
+                if suspicious_episode_remaining > 0 and rng.random() < 0.22:
+                    suspicious_episode_remaining = max(0, suspicious_episode_remaining - 1)
+                if suspicious_episode_remaining == 0:
+                    suspicious_episode_step = 0
+                    prior_suspicious_direction = None
+                    prior_suspicious_amount = None
+                    episode_anchor_amount = None
+                    burst_remaining = 0
             tx_id += 1
         if account_number % progress_every == 0 or account_number == total_accounts_to_generate:
             _progress(
@@ -2368,19 +2779,43 @@ def run_simulation() -> dict:
     RAW_SIMULATION_COLUMNS = list(df_final.columns)
 
     VALIDATION_ONLY_COLUMNS = [
-        "Account_is_laundering", "Laundering_type", "Behaviour_component",
-        "Typology_stage", "Suspicion_indicator", "Scenario_label",
+        "Account_is_laundering", "Behaviour_component",
+        "Legitimate_behaviour", "Typology_stage", "Suspicion_indicator", "Scenario_label",
         "AML_scenario_category", "AML_scenario_code", "AML_predicate_offence",
         "AML_stage", "AML_risk_sector", "AML_scenario_source_keys",
-        "Scenario_reference_key", "Scenario_detail", "Normal_behavior_category",
+        "Normal_behavior_category",
         "Normal_behavior_source_keys", "Opened_for_laundering_flag",
         "Scenario_forced_coverage_flag", "Account_laundering_probability",
         "Transaction_purpose_category"
     ]
-    BEHAVIOUR_ONLY_COLUMNS = [
-        col for col in RAW_SIMULATION_COLUMNS
-        if col not in VALIDATION_ONLY_COLUMNS and col != "Is_laundering"
+    # These fields are valid simulation outputs, but they duplicate another
+    # retained field, are reproducible diagnostics, or describe an internal
+    # generation control. They are kept in the full labelled audit export and
+    # omitted from the clean behaviour-only view. Laundering_type is retained
+    # separately for scenario interpretation, but is not a model input.
+    BEHAVIOUR_ONLY_DUPLICATE_OR_INTERNAL_COLUMNS = [
+        "Debit_card_indicator", "Cash_intensity_score", "Cash_intensity_band", "Is_PEP", "Age_band",
+        "Income_band", "Migrant_worker_flag", "Residency_status",
+        "Business_registered", "Has_trading_permit", "VAT_registered",
+        "Uses_personal_account_for_business", "Business_premises_type",
+        "Estimated_daily_cash_turnover", "Business_age_years", "Keeps_business_records",
+        "Has_bank_loan_access", "High_risk_sector_flag", "High_risk_person_flag",
+        "Beneficial_ownership_opacity",
+        "Account_age_days", "Opened_during_observation_flag", "Active_observation_days",
+        "Account_activity_multiplier", "Expected_transaction_count",
+        "Generated_transaction_count",
+        # These values are reproducible from the retained raw fields or are
+        # generated diagnostics rather than primary simulation observations.
+        "CTR_threshold_near_miss", "Round_amount_flag", "PEP_related_transaction",
+        "KYC_strength", "First_observed_transaction_date", "Primary_social_grant_type",
     ]
+    # The public export is deliberately a fixed contract.  Do not derive it
+    # from the full audit dataframe: that would make new diagnostic columns
+    # silently appear in the public CSV or Excel sample.
+    missing_public_columns = [col for col in PUBLIC_FINAL_COLUMNS if col not in df_final.columns]
+    if missing_public_columns:
+        raise RuntimeError(f"Public final schema columns are missing: {missing_public_columns}")
+    BEHAVIOUR_ONLY_COLUMNS = [col for col in PUBLIC_FINAL_COLUMNS if col != "Is_laundering"]
 
     print("Total Transactions:", len(df))
     print("Transaction-level suspicious %:", round(df["Is_laundering"].mean(), 4))
@@ -2591,20 +3026,16 @@ def run_simulation() -> dict:
     )
     DATA_OUTPUT_ROOT = Path(os.getenv("AML_SIM_DATA_DIR", str(DEFAULT_SIMULATED_DATA_DIR)))
     SIMULATED_DATA_DIR = DATA_OUTPUT_ROOT
-    FULL_SAML_DIR = SIMULATED_DATA_DIR / "01_full_saml"
-    BEHAVIOUR_ONLY_DIR = SIMULATED_DATA_DIR / "02_behaviour_only"
-    FINAL_RESULTS_DIR = SIMULATED_DATA_DIR / "03_final_results_excel"
-    OPTIONAL_ENGINEERED_DIR = SIMULATED_DATA_DIR / "04_optional_engineered"
-    for output_dir in [FULL_SAML_DIR, BEHAVIOUR_ONLY_DIR, FINAL_RESULTS_DIR, OPTIONAL_ENGINEERED_DIR]:
+    FULL_SAML_DIR = SIMULATED_DATA_DIR
+    FINAL_RESULTS_DIR = Path(os.getenv("AML_SIM_INSIGHTS_DIR", str(INSIGHTS_DIR)))
+    FEATURE_AUDIT_OUTPUT_DIR = Path(os.getenv("AML_SIM_FEATURE_AUDIT_DIR", str(FEATURE_AUDIT_DIR)))
+    for output_dir in [FULL_SAML_DIR, FINAL_RESULTS_DIR, FEATURE_AUDIT_OUTPUT_DIR]:
         output_dir.mkdir(parents=True, exist_ok=True)
     EXCEL_SAMPLE_ROWS = int(os.getenv("AML_SIM_EXCEL_SAMPLE_ROWS", "5000"))
     EXCEL_MAX_ROWS = 1_048_576
 
     raw_export_columns = [col for col in RAW_SIMULATION_COLUMNS if col in df_final.columns]
-    behaviour_export_columns = ["Is_laundering"] + [
-        col for col in raw_export_columns
-        if col not in VALIDATION_ONLY_COLUMNS and col != "Is_laundering"
-    ]
+    behaviour_export_columns = list(PUBLIC_FINAL_COLUMNS)
 
 
     def percent(series):
@@ -2621,6 +3052,8 @@ def run_simulation() -> dict:
         dataset_overview = pd.DataFrame([
             ("Receiver accounts", int(df_final["Account_id"].nunique())),
             ("Transaction rows", int(len(df_final))),
+            ("Final simulation columns", int(len(behaviour_export_columns))),
+            ("Full audit columns", int(len(raw_export_columns))),
             ("Average transactions per account", round(float(len(df_final) / df_final["Account_id"].nunique()), 2)),
             ("Median transactions per account", int(account_counts.median())),
             ("95th percentile transactions per account", int(account_counts.quantile(0.95))),
@@ -2647,9 +3080,8 @@ def run_simulation() -> dict:
             ("Maximum transactions per account", int(account_counts.max())),
             ("Cross-border transaction share", f"{df_final['Cross_border_transaction'].mean() * 100:.2f}%"),
             ("FATF contextual exposure share", f"{fatf_mask.mean() * 100:.2f}%"),
-            ("Raw simulation columns exported", int(len(raw_export_columns))),
-            ("Raw behaviour-only columns exported", int(len(behaviour_export_columns))),
-            ("Engineered notebook-only columns", int(len(ENGINEERED_FEATURE_COLUMNS))),
+            ("Full audit columns retained", int(len(raw_export_columns))),
+            ("Clean final columns exported", int(len(behaviour_export_columns))),
         ], columns=["Metric", "Value"])
 
         label_comparison = (
@@ -2788,9 +3220,11 @@ def run_simulation() -> dict:
         account_sequence_quantiles = account_counts.quantile([0, .25, .5, .75, .9, .95, .99, 1]).reset_index()
         account_sequence_quantiles.columns = ["Quantile", "Transactions_per_account"]
 
-        raw_columns_df = pd.DataFrame({"Raw_simulation_column": raw_export_columns})
-        behaviour_columns_df = pd.DataFrame({"Raw_behaviour_only_column": behaviour_export_columns})
-        engineered_columns_df = pd.DataFrame({"Notebook_engineered_column_not_in_raw_export": ENGINEERED_FEATURE_COLUMNS})
+        # The workbook is a final-results view. Keep its visible column
+        # dictionaries and sample aligned with the clean 58-column export;
+        # the full labelled audit CSV remains available separately.
+        raw_columns_df = pd.DataFrame({"Final_simulation_column": behaviour_export_columns})
+        behaviour_columns_df = pd.DataFrame({"Clean_final_column": behaviour_export_columns})
 
         return {
             "dataset_overview": dataset_overview,
@@ -2806,32 +3240,88 @@ def run_simulation() -> dict:
             "sequence_quantiles": account_sequence_quantiles,
             "raw_columns": raw_columns_df,
             "behaviour_columns": behaviour_columns_df,
-            "engineered_not_exported": engineered_columns_df,
         }
 
 
     if EXPORT_SIMULATION_FILES:
-        raw_path = FULL_SAML_DIR / f"{OUTPUT_PREFIX}.csv"
-        behaviour_path = BEHAVIOUR_ONLY_DIR / f"{OUTPUT_PREFIX}_behaviour_only.csv"
+        public_path = FULL_SAML_DIR / f"{OUTPUT_PREFIX}.csv"
+        audit_path = FEATURE_AUDIT_OUTPUT_DIR / f"{OUTPUT_PREFIX}_full_audit.csv"
         excel_path = FINAL_RESULTS_DIR / f"{OUTPUT_PREFIX}_final_results.xlsx"
-        engineered_path = OPTIONAL_ENGINEERED_DIR / f"{OUTPUT_PREFIX}_engineered_features.csv"
+        schema_path = FULL_SAML_DIR / f"{OUTPUT_PREFIX}_schema.json"
+        dictionary_path = FINAL_RESULTS_DIR / f"{OUTPUT_PREFIX}_data_dictionary.xlsx"
 
-        df_final[raw_export_columns].to_csv(raw_path, index=False)
-        df_final[behaviour_export_columns].to_csv(behaviour_path, index=False)
-        print(f"Saved raw simulation dataset to {raw_path.resolve()}")
-        print(f"Saved raw behaviour-only dataset to {behaviour_path.resolve()}")
-        print(f"Raw simulation columns exported: {len(raw_export_columns)}")
-        print(f"Raw behaviour-only columns exported: {len(behaviour_export_columns)}")
+        # Keep one public CSV in simulated_data.  The richer audit source is
+        # stored with the feature-audit outputs so it is not confused with the
+        # public analysis dataset.
+        df_final[behaviour_export_columns].to_csv(public_path, index=False)
+        df_final[raw_export_columns].to_csv(audit_path, index=False)
+        schema_columns = []
+        for index, column in enumerate(behaviour_export_columns, start=1):
+            schema_column = {
+                "order": index,
+                "name": column,
+                "group": PUBLIC_COLUMN_GROUPS[column],
+                "description": PUBLIC_COLUMN_DESCRIPTIONS[column],
+                "dtype": str(df_final[column].dtype),
+                "role": "target" if column == "Is_laundering" else (
+                    "identifier" if column in {"Transaction_id", "Account_id", "Sender_account", "Receiver_account", "Counterparty_account"}
+                    else "simulation_field"
+                ),
+                "categorical": column in PUBLIC_CATEGORICAL_COLUMNS,
+            }
+            if column in PUBLIC_CATEGORICAL_COLUMNS:
+                observed_values = (
+                    df_final[column]
+                    .dropna()
+                    .astype(str)
+                    .drop_duplicates()
+                    .sort_values()
+                    .tolist()
+                )
+                schema_column["observed_values"] = observed_values
+                schema_column["observed_value_count"] = len(observed_values)
+            schema_columns.append(schema_column)
+        schema_payload = {
+            "schema_version": "1.0",
+            "dataset_file": public_path.name,
+            "column_count": len(behaviour_export_columns),
+            "target_column": "Is_laundering",
+            "categorical_column_count": sum(column in PUBLIC_CATEGORICAL_COLUMNS for column in behaviour_export_columns),
+            "description": "Canonical public schema for the South African retail AML simulation dataset. Descriptions document the simulation meaning; observed_values lists the distinct categorical values in this release.",
+            "columns": schema_columns,
+        }
+        schema_path.write_text(json.dumps(schema_payload, indent=2), encoding="utf-8")
+        data_dictionary = pd.DataFrame([
+            {
+                "Order": column["order"],
+                "Column": column["name"],
+                "Group": column["group"],
+                "Description": column["description"],
+                "Derivation rule": PUBLIC_COLUMN_RULES[column["name"]],
+                "Role": column["role"],
+                "Categorical": column["categorical"],
+                "Observed unique values": " | ".join(column.get("observed_values", [])),
+                "Unique value count": column.get("observed_value_count", ""),
+                "Data type": column["dtype"],
+            }
+            for column in schema_columns
+        ])
+        print(f"Saved public simulation dataset to {public_path.resolve()}")
+        print(f"Saved full audit source to {audit_path.resolve()}")
+        print(f"Saved public schema to {schema_path.resolve()}")
+        print(f"Full audit columns exported: {len(raw_export_columns)}")
+        print(f"Clean final columns exported: {len(behaviour_export_columns)}")
 
         if EXPORT_EXCEL_RESULTS:
             summary_tables = make_export_summary_tables()
+            summary_tables["data_dictionary"] = data_dictionary
             try:
                 with pd.ExcelWriter(excel_path) as writer:
                     for sheet_name, table in summary_tables.items():
                         table.to_excel(writer, sheet_name=sheet_name[:31], index=False)
                     sample_rows = min(EXCEL_SAMPLE_ROWS, EXCEL_MAX_ROWS - 1, len(df_final))
                     if sample_rows > 0:
-                        df_final[raw_export_columns].head(sample_rows).to_excel(
+                        df_final[behaviour_export_columns].head(sample_rows).to_excel(
                             writer,
                             sheet_name="raw_sample",
                             index=False,
@@ -2842,13 +3332,14 @@ def run_simulation() -> dict:
                 print(f"Excel export failed: {exc}")
                 print("Install openpyxl or xlsxwriter, then rerun the export cell to create the .xlsx workbook.")
 
+            try:
+                data_dictionary.to_excel(dictionary_path, index=False, sheet_name="data_dictionary")
+                print(f"Saved simulation data dictionary to {dictionary_path.resolve()}")
+            except Exception as exc:
+                print(f"Data-dictionary export failed: {exc}")
+
         if EXPORT_ENGINEERED_FEATURES:
-            engineered_export_columns = ["Transaction_id", "Account_id", "Is_laundering"] + [
-                col for col in ENGINEERED_FEATURE_COLUMNS
-                if col in df_final.columns
-            ]
-            df_final[engineered_export_columns].to_csv(engineered_path, index=False)
-            print(f"Saved optional engineered diagnostics to {engineered_path.resolve()}")
+            print("Optional engineered export requested; no engineered file is written by the clean simulator.")
     else:
         print("File export skipped. Set AML_SIM_EXPORT_FILES=1 to save raw CSV files and the Excel final-results workbook.")
         print(f"Dataset folders are prepared under {SIMULATED_DATA_DIR.resolve()}")

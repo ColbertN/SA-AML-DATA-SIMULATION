@@ -45,10 +45,10 @@ from src.sa_aml_simulation.config import (
     DEFAULT_SUSPICIOUS_TX_PROB_SCALE,
 )
 from src.sa_aml_simulation.paths import (
+    FEATURE_AUDIT_DIR,
     FULL_SAML_DIR,
     SIMULATED_DATA_DIR,
     TABLE_CSV_DIR,
-    TABLE_EXCEL_DIR,
     ensure_project_dirs,
 )
 from src.sa_aml_simulation.figure_helpers import (
@@ -63,12 +63,9 @@ from src.sa_aml_simulation.figure_helpers import (
 
 def _default_input_csv(output_prefix: str | None = None) -> Path:
     prefix = output_prefix or os.getenv("AML_SIM_OUTPUT_PREFIX", DEFAULT_OUTPUT_PREFIX)
-    preferred_path = FULL_SAML_DIR / f"{prefix}.csv"
+    preferred_path = FEATURE_AUDIT_DIR / f"{prefix}_full_audit.csv"
     if preferred_path.exists():
         return preferred_path
-    legacy_path = SIMULATED_DATA_DIR / "01_full_saml_raw" / f"{prefix}.csv"
-    if legacy_path.exists():
-        return legacy_path
     return preferred_path
 
 
@@ -94,8 +91,10 @@ def _reconstruct_receiver_accounts(df_final: pd.DataFrame) -> pd.DataFrame:
             .max()
         )
         account_rows["Account_is_laundering"] = account_rows["Account_id"].map(account_labels).fillna(0).astype(int)
-    if "Receiver_account" not in account_rows.columns:
-        account_rows["Receiver_account"] = account_rows["Account_id"]
+    # Account_id is the monitored receiver-account key. The first transaction
+    # row may have a different Receiver_account when the account sends funds,
+    # so profile joins must use the monitored account itself.
+    account_rows["Receiver_account"] = account_rows["Account_id"]
     account_rows = account_rows.drop(columns=["Account_id"], errors="ignore")
     return account_rows.reset_index(drop=True)
 
@@ -207,8 +206,7 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
 
     PAYMENT_TYPES = [
         "Cash Deposit", "Cash Withdrawal", "Electronic Transfer", "RTC", "PayShap",
-        "Debit Card", "Credit Card", "Cheque", "International Wire", "Social Grant",
-        "Procurement EFT", "Crypto Exchange Off-Ramp"
+        "Card Payment", "Cheque", "International Wire"
     ]
 
     LAUNDERING_TYPES = [
@@ -777,7 +775,6 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
         axes[1].legend()
         axes[1].grid(True)
 
-        plt.suptitle("Monthly Transactions (Separated, Own Scales)")
         plt.tight_layout()
         finish_plot("eda_monthly_transactions_by_label.png")
 
@@ -809,7 +806,6 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
         axes[1].legend()
         axes[1].grid(True)
 
-        plt.suptitle("Weekly Transactions (Separated, Own Scales)")
         plt.tight_layout()
         finish_plot("eda_weekly_transactions_by_label.png")
 
@@ -843,7 +839,6 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
         axes[1].legend()
         axes[1].grid(True)
 
-        plt.suptitle("Daily Transactions (Separated, Own Scales)")
         plt.tight_layout()
         finish_plot("eda_daily_transactions_by_label.png")
 
@@ -2016,13 +2011,21 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
         grant_type_df = analysis_df[analysis_df["Social_grant_type"].astype(str).ne("Not applicable")].copy()
     else:
         grant_type_df = analysis_df.iloc[0:0].copy()
-    grant_inflow_df = grant_type_df[grant_type_df["Payment_type"].eq("Social Grant")].copy() if not grant_type_df.empty else grant_type_df.copy()
+    grant_inflow_df = (
+        grant_type_df[
+            grant_type_df["Direction"].eq("Inflow")
+            if "Direction" in grant_type_df.columns
+            else grant_type_df.index.to_series().isin(grant_type_df.index)
+        ].copy()
+        if not grant_type_df.empty
+        else grant_type_df.copy()
+    )
     if not grant_type_df.empty:
         publication_tables["social_grant_type_summary"] = (
             grant_type_df.groupby("Social_grant_type")
             .agg(
                 grant_linked_transactions=("Transaction_id", "count"),
-                social_grant_inflows=("Payment_type", lambda x: int(x.eq("Social Grant").sum())),
+                social_grant_inflows=("Direction", lambda x: int(x.eq("Inflow").sum())),
                 median_amount=("Amount", "median"),
                 mean_amount=("Amount", "mean"),
                 cash_share=("cash_transaction", "mean"),
@@ -2308,13 +2311,9 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
 
     EXPORT_PUBLICATION_TABLES = os.getenv("AML_SIM_EXPORT_TABLES", "1") != "0"
     if EXPORT_PUBLICATION_TABLES:
-        _progress("Exporting insight tables to CSV and Excel.")
+        _progress("Exporting insight tables to CSV.")
         TABLE_CSV_DIR.mkdir(parents=True, exist_ok=True)
-        TABLE_EXCEL_DIR.mkdir(parents=True, exist_ok=True)
-        table_prefix = globals().get("OUTPUT_PREFIX", os.getenv("AML_SIM_OUTPUT_PREFIX", DEFAULT_OUTPUT_PREFIX))
-        excel_tables_path = TABLE_EXCEL_DIR / f"{table_prefix}_insight_tables.xlsx"
         exported_table_paths = []
-        excel_ready_tables = []
         for table_name, table_value in publication_tables.items():
             safe_name = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in str(table_name)).strip("_")[:80]
             if isinstance(table_value, pd.Series):
@@ -2324,23 +2323,6 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
             csv_path = TABLE_CSV_DIR / f"{safe_name}.csv"
             export_table.to_csv(csv_path, index=False)
             exported_table_paths.append(csv_path)
-            excel_ready_tables.append((safe_name[:31], export_table))
-        try:
-            with pd.ExcelWriter(excel_tables_path) as writer:
-                used_sheet_names = set()
-                for sheet_name, export_table in excel_ready_tables:
-                    base_name = sheet_name or "table"
-                    candidate = base_name[:31]
-                    suffix = 1
-                    while candidate in used_sheet_names:
-                        suffix_text = f"_{suffix}"
-                        candidate = f"{base_name[:31-len(suffix_text)]}{suffix_text}"
-                        suffix += 1
-                    used_sheet_names.add(candidate)
-                    export_table.to_excel(writer, sheet_name=candidate, index=False)
-            print(f"Insight tables saved to {excel_tables_path}")
-        except Exception as exc:
-            print(f"Could not create insight-table Excel workbook: {exc}")
         print(f"Insight table CSV files saved: {len(exported_table_paths)}")
 
     print("\nInsight plot files saved:")

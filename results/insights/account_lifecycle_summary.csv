@@ -1,0 +1,4 @@
+account_lifecycle_segment,accounts,suspicious_account_rate,median_tx_count,avg_tx_per_active_month,avg_cross_border_share,avg_cash_share
+Established account,30217,0.0845550517920376,30.0,1.6479238249068497,0.1964624771424502,0.2155097788732915
+New legitimate / newly observed account,3617,0.07713574785734034,14.0,4.086410060278619,0.12120456334625311,0.20146126966996458
+New account opened for laundering scenario,1166,1.0,5.0,3.297084210059957,0.19765655752109512,0.23172761185465413
