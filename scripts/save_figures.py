@@ -65,6 +65,12 @@ def main() -> None:
         print_step("Applying command-line options to figure configuration.")
         apply_env_overrides(args)
 
+        print_step("Generating the architecture figure from the current validation snapshot.")
+        from src.sa_aml_simulation.architecture import generate_architecture_figure
+
+        architecture_path = generate_architecture_figure(show=False)
+        print_step(f"Architecture figure saved to: {architecture_path}")
+
         print_step("Importing figure pipeline.")
         from src.sa_aml_simulation.figure_pipeline import generate_figures
 
