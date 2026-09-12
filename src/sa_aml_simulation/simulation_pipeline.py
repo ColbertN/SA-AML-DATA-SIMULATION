@@ -3029,7 +3029,7 @@ def run_simulation() -> dict:
     FEATURE_AUDIT_OUTPUT_DIR = Path(os.getenv("AML_SIM_FEATURE_AUDIT_DIR", str(FEATURE_AUDIT_DIR)))
     for output_dir in [FULL_SAML_DIR, FINAL_RESULTS_DIR, FEATURE_AUDIT_OUTPUT_DIR]:
         output_dir.mkdir(parents=True, exist_ok=True)
-    SAMPLE_ROWS = int(os.getenv("AML_SIM_SAMPLE_ROWS", "5000"))
+    SAMPLE_ROWS = int(os.getenv("AML_SIM_SAMPLE_ROWS", "15"))
 
     raw_export_columns = [col for col in RAW_SIMULATION_COLUMNS if col in df_final.columns]
     behaviour_export_columns = list(PUBLIC_FINAL_COLUMNS)
@@ -3303,8 +3303,15 @@ def run_simulation() -> dict:
             for column in schema_columns
         ])
         data_dictionary.to_csv(dictionary_path, index=False)
-        sample_rows = min(SAMPLE_ROWS, len(df_final))
-        df_final[behaviour_export_columns].head(sample_rows).to_csv(sample_path, index=False)
+        # Keep the GitHub-readable sample account-diverse: one transaction per
+        # account makes the compact preview useful without exposing the full CSV.
+        sample_frame = (
+            df_final[behaviour_export_columns]
+            .drop_duplicates(subset=["Account_id"], keep="first")
+            .head(SAMPLE_ROWS)
+        )
+        sample_rows = len(sample_frame)
+        sample_frame.to_csv(sample_path, index=False)
 
         export_summary_tables = make_export_summary_tables()
         for table_name, table in export_summary_tables.items():

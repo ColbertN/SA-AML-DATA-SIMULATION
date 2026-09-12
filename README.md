@@ -513,9 +513,10 @@ label comparison, transaction statistics, account sequence statistics, AML
 scenario metrics, normal behaviour metrics, payment-rail metrics, province
 metrics, country metrics, sequence quantiles, and public-column inventories.
 
-`results/simulated_data/SA_SAML_D_sample.csv` is a small, GitHub-readable sample
-of the public transaction record. It contains the same 58 columns as the full
-CSV and is intended for quick inspection without downloading the large file.
+`results/simulated_data/SA_SAML_D_sample.csv` is a small, 15-row, GitHub-readable
+sample of the public transaction record. It contains the same 58 columns as the
+full CSV and shows one transaction from 15 different accounts for quick
+inspection without downloading the large file.
 `results/simulated_data/SA_SAML_D_data_dictionary.csv` documents every public
 column's group, meaning, derivation rule, data type, role, and observed
 categorical values. `SA_SAML_D_schema.json` provides the machine-readable schema.
@@ -738,7 +739,7 @@ $env:AML_SIM_START_DATE="2024-01-01"
 $env:AML_SIM_END_DATE="2026-03-31"
 $env:AML_SIM_SEED="42"
 $env:AML_SIM_EXPORT_FILES="1"
-$env:AML_SIM_SAMPLE_ROWS="5000"
+$env:AML_SIM_SAMPLE_ROWS="15"
 $env:AML_SIM_DATA_DIR="results/simulated_data"
 $env:AML_SIM_PLOTS_DIR="results/images"
 ```
