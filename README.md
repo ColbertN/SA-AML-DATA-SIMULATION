@@ -86,6 +86,126 @@ Large generated datasets under `results/simulated_data/` are ignored by Git
 because full simulation files can exceed GitHub's normal file-size limit. They
 can be regenerated from the notebook or scripts.
 
+## Selected Validation Views
+
+The repository contains a larger set of individually saved diagnostics. The
+plots below are selected views that explain the main construction choices and
+can be inspected directly from the GitHub landing page.
+
+<details open>
+<summary><strong>Overview and account population</strong></summary>
+
+<p align="center">
+  <img src="results/images/01_eda_overview/01a_transaction_label_imbalance.png" alt="Transaction-level label balance" width="48%">
+  <img src="results/images/01_eda_overview/01b_receiver_account_label_imbalance.png" alt="Account-level label balance" width="48%">
+</p>
+
+The transaction-level and account-level views are shown together because their
+shares are intentionally different. Suspicious accounts retain ordinary
+transactions, so the account label is not copied to every row in the account
+history.
+</details>
+
+<details open>
+<summary><strong>Account histories and transaction timing</strong></summary>
+
+<p align="center">
+  <img src="results/images/02_temporal_sequence/02_receiver_account_sequence_lengths.png" alt="Receiver-account sequence lengths" width="48%">
+  <img src="results/images/02_temporal_sequence/03_active_days_vs_account_transaction_count.png" alt="Active days versus account transaction count" width="48%">
+</p>
+
+Account histories vary in both length and active observation period. This is a
+central design feature: transaction count alone is not intended to identify a
+suspicious account, while timing and sequence structure remain available for
+later analysis.
+</details>
+
+<details open>
+<summary><strong>Amounts, payment rails and inter-transaction timing</strong></summary>
+
+<p align="center">
+  <img src="results/images/03_payments_amounts/06a_amount_distribution_by_label.png" alt="Transaction amount distribution by label" width="48%">
+  <img src="results/images/03_payments_amounts/06b_payment_rail_mix_by_label.png" alt="Payment rail mix by label" width="48%">
+  <img src="results/images/02_temporal_sequence/18a_time_since_previous_transaction_boxplot.png" alt="Time since previous transaction" width="48%">
+</p>
+
+The amount and timing views show why the simulator uses overlapping classes.
+Cash, electronic transfers and other operational rails occur in both normal and
+suspicious activity. Suspicious typologies receive distinctive amount and
+timing patterns, but no single payment rail is treated as a laundering label.
+</details>
+
+<details open>
+<summary><strong>Normal behaviour and social grants</strong></summary>
+
+<p align="center">
+  <img src="results/images/05_normal_behaviour/10_normal_behaviour_fingerprint_heatmap.png" alt="Normal behaviour fingerprint heatmap" width="48%">
+  <img src="results/images/05_normal_behaviour/30_social_grant_payment_day_pattern.png" alt="Social grant payment day pattern" width="48%">
+</p>
+
+Normal activity includes salary-linked spending, grants, informal trade,
+remittances, stokvels, household payments and irregular income. Grant-linked
+accounts can also contain non-grant transactions and can receive suspicious
+overlays, so grant status is contextual rather than determinative.
+</details>
+
+<details open>
+<summary><strong>AML typologies and relationship examples</strong></summary>
+
+<p align="center">
+  <img src="results/images/04_aml_typologies/08_aml_scenario_fingerprint_heatmap.png" alt="AML scenario fingerprint heatmap" width="48%">
+  <img src="results/images/04_aml_typologies/31_network_ponzi_scheme_collections.png" alt="Ponzi or investment scheme relationship example" width="48%">
+  <img src="results/images/04_aml_typologies/32_network_mule_pass_through.png" alt="Mule account pass-through relationship example" width="48%">
+  <img src="results/images/04_aml_typologies/33_network_cross_border_layering.png" alt="Cross-border layering relationship example" width="48%">
+</p>
+
+The fingerprint heatmap compares the observable transaction patterns assigned
+to the 22 AML scenarios. The three relationship diagnostics then illustrate
+how selected scenarios can be inspected through repeated synthetic account
+endpoints, direction, payment rail and cross-border context.
+</details>
+
+<details open>
+<summary><strong>Customer and socioeconomic context</strong></summary>
+
+<p align="center">
+  <img src="results/images/06_customer_profiles/27_income_employment_aml_rate_heatmap.png" alt="Income and employment AML-rate heatmap" width="48%">
+  <img src="results/images/06_customer_profiles/24_employment_sector_transaction_mix_by_label.png" alt="Employment-sector transaction mix by label" width="48%">
+</p>
+
+Customer type, employment, income, sector and demographic fields provide the
+context needed to distinguish ordinary socioeconomic variation from suspicious
+patterns. The plotted rates are simulation diagnostics, not real-world crime
+prevalence estimates.
+</details>
+
+<details open>
+<summary><strong>Geography and cross-border coverage</strong></summary>
+
+<p align="center">
+  <img src="results/images/07_geography/16b_sa_province_aml_exposure_map.png" alt="South African province exposure map" width="48%">
+  <img src="results/images/07_geography/16c_cross_border_country_risk_map.png" alt="Cross-border country risk map" width="48%">
+</p>
+
+The geography views validate provincial coverage, SADC corridors and FATF
+contextual tiers. They describe how the synthetic population is routed; they
+must not be interpreted as maps of actual crime prevalence or jurisdictional
+guilt.
+</details>
+
+<details open>
+<summary><strong>Informality and contextual inputs</strong></summary>
+
+<p align="center">
+  <img src="results/images/08_informality/17b_business_registration_cash_share.png" alt="Cash share by business registration status" width="48%">
+  <img src="results/images/09_context_diagnostics/20_context_feature_correlation_heatmap.png" alt="Context feature correlation heatmap" width="48%">
+</p>
+
+Informal and unregistered business activity is represented as a legitimate
+possibility, including cash-heavy turnover. Context fields are generated as
+probabilistic inputs and may occur in both legitimate and suspicious accounts.
+</details>
+
 ## Project Structure
 
 ```text
