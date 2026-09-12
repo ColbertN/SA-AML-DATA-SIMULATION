@@ -11,6 +11,17 @@ a transparent simulation base that can be reused for AML research, validation,
 scenario analysis, sequential modelling, explainability, calibration and
 benchmarking in a South African context.
 
+## Simulation Flow
+
+<p align="center">
+  <img src="results/images/00_framework/simulation_architecture.png" alt="South African retail AML simulation flow" width="100%">
+</p>
+
+The flow shows how the evidence base informs the synthetic account population,
+customer and context profiles, normal socioeconomic activity, suspicious AML
+typology overlays, transaction scheduling, payment and jurisdiction routing,
+and the final synthetic outputs and validation evidence.
+
 ## Executive Summary
 
 Open AML research is constrained because real banking data are confidential,
