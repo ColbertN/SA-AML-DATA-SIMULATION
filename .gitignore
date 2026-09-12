@@ -15,7 +15,12 @@ env/
 # The public final CSV is tracked with Git LFS; other generated files remain ignored.
 results/simulated_data/*
 !results/simulated_data/SA_SAML_D.csv
+!results/simulated_data/SA_SAML_D_sample.csv
+!results/simulated_data/SA_SAML_D_data_dictionary.csv
 !results/simulated_data/SA_SAML_D_schema.json
+
+# Excel workbooks are not part of the public output; use one CSV per table.
+results/insights/*.xlsx
 
 # Internal audit export is intentionally not part of the public repository.
 results/insights/feature_audit/SA_SAML_D_full_audit.csv

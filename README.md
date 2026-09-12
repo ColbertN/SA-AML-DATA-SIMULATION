@@ -107,9 +107,10 @@ can be regenerated from the notebook or scripts.
 |   |   |-- 09_context_diagnostics/
 |   |-- simulated_data/
 |   |   |-- SA_SAML_D.csv
+|   |   |-- SA_SAML_D_sample.csv
+|   |   |-- SA_SAML_D_data_dictionary.csv
 |   |   |-- SA_SAML_D_schema.json
 |   |-- insights/
-|       |-- SA_SAML_D_final_results.xlsx
 |       |-- *.csv
 |       |-- feature_audit/
 |-- logs/
@@ -228,7 +229,7 @@ use, procurement context and virtual-asset context are represented as separate
 indicator fields rather than being hidden inside the payment rail.
 
 Payment rails include electronic transfer, RTC, PayShap, card payment, cash
-deposit, cash withdrawal, cheque and international wire. Social grants use the
+deposit, cash withdrawal and international wire. Social grants use the
 ordinary electronic-transfer rail and are identified by `Social_grant_indicator`
 and `Social_grant_type`. Credit-card use is identified by
 `Credit_card_indicator`, while procurement and virtual-asset activity use
@@ -237,17 +238,17 @@ The earlier "card acquiring" label has been removed.
 
 ### 9. Raw Output Assembly
 
-The simulator exports a full synthetic SAML-style transaction file, a
-behaviour-only file, an optional Excel workbook and optional engineered
-diagnostics. The main public raw output excludes downstream modelling-engineered
+The simulator exports one complete synthetic transaction file, a public sample,
+a data dictionary and separate CSV insight tables. The main public raw output
+excludes downstream modelling-engineered
 features such as cyclical encodings, rolling sequence statistics, account
 aggregates, sequence-density fields and composite risk scores. Researchers can
 create their own engineered features from the raw simulation output.
 
-The behaviour-only export is the compact analysis view. It retains transaction
-identity, time, amount, payment and routing fields, neutral counterparty roles,
-KYC and socioeconomic context, geography, separate grant, credit, procurement
-and virtual-asset indicators, and `Laundering_type` for scenario interpretation.
+The public transaction record retains transaction identity, time, amount, payment
+and routing fields, neutral counterparty roles, KYC and socioeconomic context,
+geography, separate grant, credit, procurement and virtual-asset indicators, and
+`Laundering_type` for scenario interpretation.
 `Laundering_type`, `Scenario_detail`, `Scenario_reference_key` and
 `Is_laundering` are label-adjacent fields and must be excluded from model
 inputs; they are retained so users can audit and describe the simulated
@@ -256,13 +257,12 @@ purpose metadata, internal activity multipliers, post-generation transaction
 counts, reproducible diagnostic flags and scores, first-observed dates, and
 duplicate fields such as age bands beside age, risk flags beside their
 categories, and debit-card flags beside the card rail and credit-card
-indicator. The full labelled export retains the complete validation metadata.
-
-The clean behaviour-only file is the recommended public analysis file. It
-contains simulation observations and the target/scenario labels, but no
-downstream sequence encodings, rolling statistics, account aggregates or
-composite risk scores. Researchers can derive those features from the retained
-raw fields for their own study design.
+indicator. The public record contains the simulation observations and the
+target/scenario interpretation fields, but no downstream sequence encodings,
+rolling statistics, account aggregates or composite risk scores. Researchers
+can derive those features from the retained raw fields for their own study
+design. The separate sample CSV contains the same columns and is provided for
+quick inspection only.
 
 ### Final 58-Column Data Dictionary
 
@@ -304,7 +304,7 @@ dictionary for the final export.
 | `Sender_bank_location` | Synthetic location of the sending bank or account. | South Africa, SADC, other international, or FATF-context countries. |
 | `Receiver_bank_location` | Synthetic location of the receiving bank or account. | Same jurisdiction groups as the sender location. |
 | `Counterparty_country` | Country associated with the counterparty. | South Africa, SADC corridors, other relevant countries, or FATF-risk tiers. |
-| `Payment_type` | Operational payment rail only; it is not a scenario label. | `Cash Deposit`, `Cash Withdrawal`, `Electronic Transfer`, `RTC`, `PayShap`, `Card Payment`, `Cheque`, or `International Wire`. |
+| `Payment_type` | Operational payment rail only; it is not a scenario label. | `Cash Deposit`, `Cash Withdrawal`, `Electronic Transfer`, `RTC`, `PayShap`, `Card Payment`, or `International Wire`. |
 | `Social_grant_indicator` | Indicates that the transaction is linked to a simulated social-grant flow. | `0` or `1`; grant activity uses ordinary payment rails. |
 | `Social_grant_type` | Grant programme category linked to the transaction when applicable. | `old_age`, `disability`, `care_dependency`, `foster_child`, `child_support`, `grant_in_aid`, `srd`, or `Not applicable`. |
 | `Credit_card_indicator` | Separates credit-card context from the operational card rail. | `0` or `1`; credit-card context can occur in either class. |
@@ -375,13 +375,19 @@ Image folders:
 - `08_informality`: informal and unregistered business behaviour
 - `09_context_diagnostics`: context-correlation diagnostics
 
-Insight tables are saved as individual CSV files directly under `results/insights/`.
-The single consolidated workbook is
-`results/insights/SA_SAML_D_final_results.xlsx`.
-The column-level simulation dictionary is available at
-`results/insights/SA_SAML_D_data_dictionary.xlsx`; it includes each public
+Every insight table is saved as its own CSV file directly under
+`results/insights/`. The files correspond to the summary views previously
+presented together, including dataset overview, validation summary,
+label comparison, transaction statistics, account sequence statistics, AML
+scenario metrics, normal behaviour metrics, payment-rail metrics, province
+metrics, country metrics, sequence quantiles, and public-column inventories.
+
+`results/simulated_data/SA_SAML_D_sample.csv` is a small, GitHub-readable sample
+of the public transaction record. It contains the same 58 columns as the full
+CSV and is intended for quick inspection without downloading the large file.
+`results/simulated_data/SA_SAML_D_data_dictionary.csv` documents every public
 column's group, meaning, derivation rule, data type, role, and observed
-categorical values.
+categorical values. `SA_SAML_D_schema.json` provides the machine-readable schema.
 
 The final public schema contains exactly 58 columns, including the target and
 scenario-adjacent interpretation fields. The leakage audit examines the full
@@ -504,7 +510,7 @@ easy to infer:
   configuration.
 - Payment type is an operational rail, not a scenario label. Grant, credit-card,
   procurement and virtual-asset context are separate indicators.
-- `Counterparty_type` is retained as a broad economic role in the behaviour-only
+- `Counterparty_type` is retained as a broad economic role in the public
   export. Explicit scenario wording such as mule, victim, shell company and
   FATF-monitored entity is removed from this field; those details remain only in
   validation metadata and scenario documentation.
@@ -557,12 +563,6 @@ Run without exporting files:
 python scripts/main.py --n-accounts 500 --output-prefix smoke_test --no-files
 ```
 
-Skip the Excel workbook export:
-
-```powershell
-python scripts/main.py --no-excel
-```
-
 Export optional engineered diagnostics separately:
 
 ```powershell
@@ -607,9 +607,7 @@ $env:AML_SIM_START_DATE="2024-01-01"
 $env:AML_SIM_END_DATE="2026-03-31"
 $env:AML_SIM_SEED="42"
 $env:AML_SIM_EXPORT_FILES="1"
-$env:AML_SIM_EXPORT_EXCEL="1"
-$env:AML_SIM_EXPORT_INSIGHTS="1"
-$env:AML_SIM_EXPORT_TABLES="1"
+$env:AML_SIM_SAMPLE_ROWS="5000"
 $env:AML_SIM_DATA_DIR="results/simulated_data"
 $env:AML_SIM_PLOTS_DIR="results/images"
 ```

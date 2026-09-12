@@ -30,12 +30,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the South African AML simulation.")
     parser.add_argument("--n-accounts", type=int, help="Number of monitored receiver accounts.")
     parser.add_argument("--max-tx-per-account", type=int, help="Maximum generated transactions per account.")
-    parser.add_argument("--output-prefix", type=str, help="Prefix for exported CSV/Excel files.")
+    parser.add_argument("--output-prefix", type=str, help="Prefix for exported CSV files.")
     parser.add_argument("--seed", type=int, help="Random seed.")
     parser.add_argument("--start-date", type=str, help="Simulation start date, e.g. 2024-01-01.")
     parser.add_argument("--end-date", type=str, help="Simulation end date, e.g. 2026-03-31.")
-    parser.add_argument("--no-files", action="store_true", help="Run simulation but do not export CSV/Excel files.")
-    parser.add_argument("--no-excel", action="store_true", help="Skip the final Excel workbook export.")
+    parser.add_argument("--no-files", action="store_true", help="Run simulation but do not export CSV files.")
     parser.add_argument("--export-engineered", action="store_true", help="Also export optional engineered features.")
     return parser.parse_args()
 
@@ -55,8 +54,6 @@ def apply_env_overrides(args: argparse.Namespace) -> None:
         os.environ["AML_SIM_END_DATE"] = args.end_date
     if args.no_files:
         os.environ["AML_SIM_EXPORT_FILES"] = "0"
-    if args.no_excel:
-        os.environ["AML_SIM_EXPORT_EXCEL"] = "0"
     if args.export_engineered:
         os.environ["AML_SIM_EXPORT_ENGINEERED"] = "1"
 

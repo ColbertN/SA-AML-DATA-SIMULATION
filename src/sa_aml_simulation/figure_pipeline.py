@@ -206,7 +206,7 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
 
     PAYMENT_TYPES = [
         "Cash Deposit", "Cash Withdrawal", "Electronic Transfer", "RTC", "PayShap",
-        "Card Payment", "Cheque", "International Wire"
+        "Card Payment", "International Wire"
     ]
 
     LAUNDERING_TYPES = [

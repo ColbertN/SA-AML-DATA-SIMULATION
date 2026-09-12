@@ -1,6 +1,6 @@
 """Canonical public schema for the final SA AML simulation export.
 
-This list is the contract shared by the simulator, the Excel sample, and the
+This list is the contract shared by the simulator, the public CSV sample, and the
 feature-audit notebook.  Full audit columns remain available in the internal
 full export, but only these columns belong in the public final data view.
 """
@@ -146,7 +146,7 @@ PUBLIC_COLUMN_DESCRIPTIONS = {
     "Sender_bank_location": "Synthetic country or jurisdiction location of the sending bank or account.",
     "Receiver_bank_location": "Synthetic country or jurisdiction location of the receiving bank or account.",
     "Counterparty_country": "Synthetic country associated with the transaction counterparty.",
-    "Payment_type": "Operational payment rail and not a laundering label; examples include Cash Deposit, Cash Withdrawal, Electronic Transfer, RTC, PayShap, Card Payment, Cheque, and International Wire.",
+    "Payment_type": "Operational payment rail and not a laundering label; examples include Cash Deposit, Cash Withdrawal, Electronic Transfer, RTC, PayShap, Card Payment, and International Wire.",
     "Social_grant_indicator": "Binary indicator that the transaction is linked to a simulated social-grant flow.",
     "Social_grant_type": "Grant programme category when applicable; otherwise Not applicable.",
     "Credit_card_indicator": "Binary indicator for credit-card context; it can occur in legitimate or suspicious activity.",

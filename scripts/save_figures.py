@@ -32,10 +32,10 @@ def print_step(message: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Regenerate SA AML simulation figures and insight tables.")
     parser.add_argument("--input-csv", type=str, help="Path to the full raw simulation CSV.")
-    parser.add_argument("--output-prefix", type=str, help="Output prefix used for insight table workbook names.")
+    parser.add_argument("--output-prefix", type=str, help="Output prefix used for insight-table CSV names.")
     parser.add_argument("--skip-legacy", action="store_true", help="Skip older exploratory plots.")
     parser.add_argument("--skip-extended", action="store_true", help="Skip extended customer-profile plots.")
-    parser.add_argument("--no-tables", action="store_true", help="Skip insight table CSV/Excel export.")
+    parser.add_argument("--no-tables", action="store_true", help="Skip insight-table CSV export.")
     parser.add_argument("--no-plots", action="store_true", help="Display/compute tables but do not save plots.")
     return parser.parse_args()
 

@@ -189,7 +189,7 @@ def run_simulation() -> dict:
     # so that a rail does not become a proxy for a scenario label.
     PAYMENT_TYPES = [
         "Cash Deposit", "Cash Withdrawal", "Electronic Transfer", "RTC", "PayShap",
-        "Card Payment", "Cheque", "International Wire"
+        "Card Payment", "International Wire"
     ]
 
     LAUNDERING_TYPES = [
@@ -582,7 +582,6 @@ def run_simulation() -> dict:
             "RTC": 0.12,
             "Electronic Transfer": 0.16,
             "International Wire": 0.28,
-            "Cheque": 0.18,
         }.get(payment_type, 0.10)
         direction_factor = 1.15 if direction == "Inflow" else 0.72
         shared_median = float(np.clip(anchor * rail_factor * direction_factor, 35.0, 85_000.0))
@@ -2811,7 +2810,7 @@ def run_simulation() -> dict:
     ]
     # The public export is deliberately a fixed contract.  Do not derive it
     # from the full audit dataframe: that would make new diagnostic columns
-    # silently appear in the public CSV or Excel sample.
+    # silently appear in the public CSV or public sample.
     missing_public_columns = [col for col in PUBLIC_FINAL_COLUMNS if col not in df_final.columns]
     if missing_public_columns:
         raise RuntimeError(f"Public final schema columns are missing: {missing_public_columns}")
@@ -3008,19 +3007,18 @@ def run_simulation() -> dict:
 
     # Final exports. The public transaction file is raw simulation output only:
     # no cyclical encodings, rolling statistics, account aggregates, sequence-density
-    # fields or composite risk scores. The Excel workbook stores summary results;
-    # Excel cannot hold the full-scale transaction table in one sheet.
+    # fields or composite risk scores. Summary tables, a public sample and the
+    # data dictionary are written as separate CSV files for direct repository use.
     EXPORT_SIMULATION_FILES = os.getenv(
         "AML_SIM_EXPORT_FILES",
         os.getenv("AML_SIM_EXPORT_CSV", "1")
     ) != "0"
-    EXPORT_EXCEL_RESULTS = os.getenv("AML_SIM_EXPORT_EXCEL", "1") != "0"
     EXPORT_ENGINEERED_FEATURES = os.getenv("AML_SIM_EXPORT_ENGINEERED", "0") != "0"
     OUTPUT_PREFIX = os.getenv("AML_SIM_OUTPUT_PREFIX", DEFAULT_OUTPUT_PREFIX)
     _progress(
         "Preparing exports: "
         f"files={'yes' if EXPORT_SIMULATION_FILES else 'no'}, "
-        f"excel={'yes' if EXPORT_EXCEL_RESULTS else 'no'}, "
+        "format=csv, "
         f"engineered={'yes' if EXPORT_ENGINEERED_FEATURES else 'no'}, "
         f"prefix={OUTPUT_PREFIX}."
     )
@@ -3031,8 +3029,7 @@ def run_simulation() -> dict:
     FEATURE_AUDIT_OUTPUT_DIR = Path(os.getenv("AML_SIM_FEATURE_AUDIT_DIR", str(FEATURE_AUDIT_DIR)))
     for output_dir in [FULL_SAML_DIR, FINAL_RESULTS_DIR, FEATURE_AUDIT_OUTPUT_DIR]:
         output_dir.mkdir(parents=True, exist_ok=True)
-    EXCEL_SAMPLE_ROWS = int(os.getenv("AML_SIM_EXCEL_SAMPLE_ROWS", "5000"))
-    EXCEL_MAX_ROWS = 1_048_576
+    SAMPLE_ROWS = int(os.getenv("AML_SIM_SAMPLE_ROWS", "5000"))
 
     raw_export_columns = [col for col in RAW_SIMULATION_COLUMNS if col in df_final.columns]
     behaviour_export_columns = list(PUBLIC_FINAL_COLUMNS)
@@ -3220,8 +3217,7 @@ def run_simulation() -> dict:
         account_sequence_quantiles = account_counts.quantile([0, .25, .5, .75, .9, .95, .99, 1]).reset_index()
         account_sequence_quantiles.columns = ["Quantile", "Transactions_per_account"]
 
-        # The workbook is a final-results view. Keep its visible column
-        # dictionaries and sample aligned with the clean 58-column export;
+        # Keep the column inventories aligned with the clean 58-column export;
         # the full labelled audit CSV remains available separately.
         raw_columns_df = pd.DataFrame({"Final_simulation_column": behaviour_export_columns})
         behaviour_columns_df = pd.DataFrame({"Clean_final_column": behaviour_export_columns})
@@ -3246,9 +3242,9 @@ def run_simulation() -> dict:
     if EXPORT_SIMULATION_FILES:
         public_path = FULL_SAML_DIR / f"{OUTPUT_PREFIX}.csv"
         audit_path = FEATURE_AUDIT_OUTPUT_DIR / f"{OUTPUT_PREFIX}_full_audit.csv"
-        excel_path = FINAL_RESULTS_DIR / f"{OUTPUT_PREFIX}_final_results.xlsx"
         schema_path = FULL_SAML_DIR / f"{OUTPUT_PREFIX}_schema.json"
-        dictionary_path = FINAL_RESULTS_DIR / f"{OUTPUT_PREFIX}_data_dictionary.xlsx"
+        sample_path = FULL_SAML_DIR / f"{OUTPUT_PREFIX}_sample.csv"
+        dictionary_path = FULL_SAML_DIR / f"{OUTPUT_PREFIX}_data_dictionary.csv"
 
         # Keep one public CSV in simulated_data.  The richer audit source is
         # stored with the feature-audit outputs so it is not confused with the
@@ -3306,42 +3302,27 @@ def run_simulation() -> dict:
             }
             for column in schema_columns
         ])
+        data_dictionary.to_csv(dictionary_path, index=False)
+        sample_rows = min(SAMPLE_ROWS, len(df_final))
+        df_final[behaviour_export_columns].head(sample_rows).to_csv(sample_path, index=False)
+
+        export_summary_tables = make_export_summary_tables()
+        for table_name, table in export_summary_tables.items():
+            table.to_csv(FINAL_RESULTS_DIR / f"{table_name}.csv", index=False)
+
         print(f"Saved public simulation dataset to {public_path.resolve()}")
         print(f"Saved full audit source to {audit_path.resolve()}")
         print(f"Saved public schema to {schema_path.resolve()}")
+        print(f"Saved public sample ({sample_rows:,} rows) to {sample_path.resolve()}")
+        print(f"Saved data dictionary to {dictionary_path.resolve()}")
+        print(f"Saved {len(export_summary_tables):,} insight tables as CSV files to {FINAL_RESULTS_DIR.resolve()}")
         print(f"Full audit columns exported: {len(raw_export_columns)}")
         print(f"Clean final columns exported: {len(behaviour_export_columns)}")
-
-        if EXPORT_EXCEL_RESULTS:
-            summary_tables = make_export_summary_tables()
-            summary_tables["data_dictionary"] = data_dictionary
-            try:
-                with pd.ExcelWriter(excel_path) as writer:
-                    for sheet_name, table in summary_tables.items():
-                        table.to_excel(writer, sheet_name=sheet_name[:31], index=False)
-                    sample_rows = min(EXCEL_SAMPLE_ROWS, EXCEL_MAX_ROWS - 1, len(df_final))
-                    if sample_rows > 0:
-                        df_final[behaviour_export_columns].head(sample_rows).to_excel(
-                            writer,
-                            sheet_name="raw_sample",
-                            index=False,
-                        )
-                print(f"Saved Excel final-results workbook to {excel_path.resolve()}")
-                print(f"Excel raw_sample rows: {min(EXCEL_SAMPLE_ROWS, EXCEL_MAX_ROWS - 1, len(df_final)):,}")
-            except Exception as exc:
-                print(f"Excel export failed: {exc}")
-                print("Install openpyxl or xlsxwriter, then rerun the export cell to create the .xlsx workbook.")
-
-            try:
-                data_dictionary.to_excel(dictionary_path, index=False, sheet_name="data_dictionary")
-                print(f"Saved simulation data dictionary to {dictionary_path.resolve()}")
-            except Exception as exc:
-                print(f"Data-dictionary export failed: {exc}")
 
         if EXPORT_ENGINEERED_FEATURES:
             print("Optional engineered export requested; no engineered file is written by the clean simulator.")
     else:
-        print("File export skipped. Set AML_SIM_EXPORT_FILES=1 to save raw CSV files and the Excel final-results workbook.")
+        print("File export skipped. Set AML_SIM_EXPORT_FILES=1 to save the public CSV, sample, schema, dictionary and insight tables.")
         print(f"Dataset folders are prepared under {SIMULATED_DATA_DIR.resolve()}")
 
     _progress(
