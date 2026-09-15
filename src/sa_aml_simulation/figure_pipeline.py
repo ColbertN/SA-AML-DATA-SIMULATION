@@ -644,6 +644,45 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
             labels=["18-24", "25-34", "35-44", "45-54", "55-64", "65+"],
             include_lowest=True,
         ).astype(str)
+    if "Income_band" not in df.columns:
+        # Income_band is a diagnostic grouping, not a public field. Reconstruct
+        # it from the released income estimate and grant/business context so the
+        # extended plots remain runnable from the compact 58-field export.
+        income = pd.to_numeric(df["Monthly_income_estimate"], errors="coerce").fillna(0)
+        grant_linked = df.get("Grant_linked", pd.Series(0, index=df.index)).eq(1)
+        business_context = (
+            df.get("Business_registration_status", pd.Series("Not business", index=df.index))
+            .astype(str)
+            .ne("Not business")
+            | df.get("Employment_status", pd.Series("", index=df.index))
+            .astype(str)
+            .isin(["Business Owner", "Business Entity"])
+        )
+        df["Income_band"] = np.select(
+            [
+                grant_linked,
+                business_context,
+                income.le(2_200),
+                income.le(7_000),
+                income.le(12_000),
+                income.le(35_000),
+                income.le(85_000),
+            ],
+            [
+                "Grant-linked",
+                "Business turnover",
+                "No regular income",
+                "Low / irregular",
+                "Low formal",
+                "Middle",
+                "Upper-middle",
+            ],
+            default="Upper-middle",
+        )
+
+    # Rebuild the one-row-per-profile view after diagnostic fallbacks are
+    # available so extended plots can use reconstructed fields as well.
+    receiver_accounts = _reconstruct_receiver_accounts(df)
 
     df.columns
 

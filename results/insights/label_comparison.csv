@@ -1,3 +1,3 @@
-Label,transactions,median_amount,cash_share,cross_border_share,iftr_share,rapid_repeat_share
-Legitimate baseline,1338358,2329.58,25.64,14.43,1.28,0.96
-Suspicious AML,103121,6855.21,30.37,23.15,6.01,12.62
+Label,transactions,median_amount,avg_amount,cash_share,cross_border_share,rapid_repeat_share,iftr_reportable_share,avg_context_risk
+Legitimate baseline,1338358,2329.58,10301.874104992834,0.2563678776530644,0.14432610706552357,0.009608042093371131,0.012774608886411559,9.827739663079685
+Suspicious AML,103121,6855.21,17481.998317995363,0.3037014769057709,0.23147564511593177,0.12618186402381668,0.06009445214844697,14.68596115243258

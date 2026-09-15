@@ -1,17 +1,15 @@
 Metric,Value
-Monitored Account_id profiles,35000
-Unique Receiver_account endpoints,138279
-Unique Sender_account endpoints,139461
-Transaction rows,1441479
-Final simulation columns,58
-Raw simulator columns before public selection,107
+Monitored Account_id profiles,"35,000"
+Unique Receiver_account endpoints,"138,279"
+Unique Sender_account endpoints,"139,461"
+Transaction rows,"1,441,479"
 Average transactions per Account_id profile,41.19
 Median transactions per Account_id profile,27
 95th percentile transactions per Account_id profile,127
 Maximum transactions per Account_id profile,220
-Legitimate transaction rows,1338358
-Suspicious AML transaction rows,103121
-Legitimate Account_id profiles,31000
-Suspicious AML Account_id profiles,4000
+Legitimate transaction rows,"1,338,358"
+Suspicious AML transaction rows,"103,121"
+Legitimate Account_id profiles,"31,000"
+Suspicious AML Account_id profiles,"4,000"
 Transaction-level suspicious share,7.15%
 Account_id profile suspicious share,11.43%
