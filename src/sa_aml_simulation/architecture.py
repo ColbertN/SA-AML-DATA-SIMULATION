@@ -15,15 +15,15 @@ from .paths import IMAGE_RESULTS_DIR, ensure_project_dirs
 
 CURRENT_STATS = {
     "accounts": "35,000",
-    "transactions": "1,412,358",
+    "transactions": "1,441,479",
     "legitimate_accounts": "88.57%",
     "suspicious_accounts": "11.43%",
-    "suspicious_transactions": "2.16%",
+    "suspicious_transactions": "7.15%",
     "median": "27",
-    "p95": "126",
+    "p95": "127",
     "maximum": "220",
-    "cross_border": "14.78%",
-    "fatf": "5.91%",
+    "cross_border": "15.06%",
+    "fatf": "6.66%",
 }
 
 
@@ -126,7 +126,7 @@ def generate_architecture_figure(output_path: str | Path | None = None,
     _circle_icon(ax, 6.42, 8.745, ">", "#159447")
 
     _rounded_box(ax, 6.0, 7.62, 4.8, 0.58,
-                 f"STEP 1: Generate {CURRENT_STATS['accounts']} Receiver Accounts\n"
+                 f"STEP 1: Generate {CURRENT_STATS['accounts']} monitored Account_id profiles\n"
                  "Observation window: 2024-01-01 to 2026-03-31",
                  COLORS["orange"], fontsize=9.0, weight="bold", text_x=8.85)
     _circle_icon(ax, 6.42, 7.91, "A", "#a96718")
@@ -144,9 +144,9 @@ def generate_architecture_figure(output_path: str | Path | None = None,
                  text_y=5.64)
     _circle_icon(ax, 5.77, 5.67, "T", "#a96718")
     ax.text(8.45, 5.13,
-            f"Median/account: {CURRENT_STATS['median']}  |  "
-            f"p95/account: {CURRENT_STATS['p95']}  |  "
-            f"Maximum/account: {CURRENT_STATS['maximum']}",
+            f"Median/profile: {CURRENT_STATS['median']}  |  "
+            f"p95/profile: {CURRENT_STATS['p95']}  |  "
+            f"Maximum/profile: {CURRENT_STATS['maximum']}",
             ha="center", va="center", fontsize=7.9, color=COLORS["muted"])
 
     _rounded_box(ax, 6.0, 4.35, 4.8, 0.5,
@@ -220,7 +220,7 @@ def generate_architecture_figure(output_path: str | Path | None = None,
 
     # Context input panel and connectors.
     _rounded_box(ax, 14.15, 6.1, 2.25, 2.2,
-                 "CONTEXTUAL\nSIMULATION INPUTS\n\n- Customer profile\n- Socioeconomic status\n- Geography\n- Payment context\n- Jurisdiction\n- PEP / intermediary context\n- Virtual-asset exposure\n\nFATF contextual\nexposure share: 5.91%",
+                 f"CONTEXTUAL\nSIMULATION INPUTS\n\n- Customer profile\n- Socioeconomic status\n- Geography\n- Payment context\n- Jurisdiction\n- PEP / intermediary context\n- Virtual-asset exposure\n\nFATF contextual\nexposure share: {CURRENT_STATS['fatf']}",
                  COLORS["purple"], fontsize=7.5, weight="bold",
                  edge="#4b17a8", text_x=15.35)
     _circle_icon(ax, 14.42, 7.82, "C", "#5420b4")
@@ -262,7 +262,7 @@ def generate_architecture_figure(output_path: str | Path | None = None,
     ax.text(0.85, 1.2, "Validation snapshot:", ha="left", va="center",
             fontsize=9.2, fontweight="bold", color="#0a56b5")
     first = [
-        f"{CURRENT_STATS['accounts']}\nreceiver accounts",
+        f"{CURRENT_STATS['accounts']}\nAccount_id profiles",
         f"{CURRENT_STATS['transactions']}\ntransactions",
         f"legitimate-account\nshare: {CURRENT_STATS['legitimate_accounts']}",
         f"suspicious-account\nshare: {CURRENT_STATS['suspicious_accounts']}",
@@ -272,9 +272,9 @@ def generate_architecture_figure(output_path: str | Path | None = None,
     second = [
         "22 AML scenarios",
         "11 normal behaviour categories",
-        f"median/account: {CURRENT_STATS['median']}",
-        f"p95/account: {CURRENT_STATS['p95']}",
-        f"maximum/account: {CURRENT_STATS['maximum']}",
+        f"median/profile: {CURRENT_STATS['median']}",
+        f"p95/profile: {CURRENT_STATS['p95']}",
+        f"maximum/profile: {CURRENT_STATS['maximum']}",
         f"cross-border share: {CURRENT_STATS['cross_border']}",
     ]
     for idx, text in enumerate(first):

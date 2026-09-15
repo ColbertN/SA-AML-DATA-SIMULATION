@@ -1,16 +1,18 @@
 Metric,Value
-Receiver accounts,35000
-Transactions,1412358
+Monitored Account_id profiles,35000
+Unique Receiver_account endpoints,138279
+Unique Sender_account endpoints,139461
+Transactions,1441479
 Observation window,2024-01-01 to 2026-03-31
 Target suspicious-account share,10.00%
 Realised suspicious-account share,11.43%
-Transaction-level suspicious share,2.16%
+Transaction-level suspicious share,7.15%
 AML scenarios represented,22
 Normal behaviour categories represented,11
-Median transactions per account,27
-95th percentile transactions per account,126
-Maximum transactions per account,220
-Cross-border transaction share,14.78%
-FATF contextual exposure share,5.91%
-Full audit columns retained,107
+Median transactions per Account_id profile,27
+95th percentile transactions per Account_id profile,127
+Maximum transactions per Account_id profile,220
+Cross-border transaction share,15.06%
+FATF contextual exposure share,6.66%
+Raw simulator columns before public selection,107
 Clean final columns exported,58

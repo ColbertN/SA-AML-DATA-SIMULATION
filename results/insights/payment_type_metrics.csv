@@ -1,8 +1,8 @@
 Payment_type,transactions,suspicious_rate,median_amount,cross_border_share
-Electronic Transfer,382401,2.23,4281.35,15.29
-Card Payment,287486,0.36,670.85,0.06
-PayShap,224897,0.79,864.32,21.61
-Cash Deposit,192725,4.16,7541.83,0.09
-Cash Withdrawal,172558,1.97,1821,0.03
-International Wire,86128,5.48,5544.105,88.84
-RTC,66163,4.58,5462.14,37.58
+Electronic Transfer,397739,8.93,4433.53,15.43
+Card Payment,282432,1.54,676.88,0.22
+PayShap,220822,2.05,851.185,21.07
+Cash Deposit,200065,10.93,7788.73,0.33
+Cash Withdrawal,174365,5.42,1877.87,0.09
+International Wire,95546,18.75,6202.85,86.23
+RTC,70510,13.49,5304.45,35.87

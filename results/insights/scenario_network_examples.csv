@@ -1,4 +1,4 @@
 scenario,main_account,displayed_transactions,displayed_edges,unique_displayed_counterparties,inflow_transactions,outflow_transactions,cross_border_share,median_displayed_amount,total_displayed_amount
-Ponzi / Investment Scheme Collections,8991471311,16,8,5,12,4,0.0,4268.6,82083.07
-Mule Account / Rapid Pass-Through,92370724242,16,9,4,8,8,0.0,12660.73,306674.79
-Cross-Border Layering via SADC Corridor,4053888625,16,16,7,10,6,1.0,7772.96,275511.54
+Ponzi / Investment Scheme Collections,22849466364,16,9,6,12,4,0.0,31043.97,692074.48
+Mule Account / Rapid Pass-Through,40575466442,16,12,4,8,8,0.3125,10880.53,212702.28
+Cross-Border Layering via SADC Corridor,5466164978,16,16,8,9,7,1.0,8236.46,257768.32

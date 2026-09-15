@@ -1,0 +1,3 @@
+AML_scenario_category,suspicious_transactions,cash_deposit_transactions,cash_withdrawal_transactions,electronic_transfer_transactions,inflow_transactions,outflow_transactions,short_lag_alternating_pairs,median_gap_minutes
+Cash Courier / Bulk Cash Movement,9500,3545,3419,2364,4532,4968,4815,76.69
+Narcotics Cash Proceeds,10172,4564,3299,2159,4843,5329,5426,73.62

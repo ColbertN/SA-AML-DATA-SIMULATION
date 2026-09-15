@@ -1,0 +1,23 @@
+AML_scenario_category,suspicious_profiles,minimum_suspicious_transactions,median_suspicious_transactions,minimum_suspicious_share,median_suspicious_share,minimum_episode_count,median_episode_count,median_suspicious_amount
+Cash Courier / Bulk Cash Movement,289,14,19.0,58.33,68.97,1,5.0,6340.99
+Casino or Gambling Laundering,99,15,19.0,60.71,70.83,2,5.0,2759.4
+Complex Legal Structure / Beneficial Ownership Obfuscation,169,10,13.0,53.12,61.11,2,5.0,10770.13
+Cross-Border Layering via SADC Corridor,283,10,14.0,52.38,61.76,2,5.0,5942.5599999999995
+Crypto Asset Off-Ramp,151,11,13.0,57.14,66.67,1,4.0,4952.05
+Cybercrime Proceeds,180,12,15.0,58.46,68.29,1,2.0,1569.0025
+Environmental or Wildlife Crime Proceeds,67,10,13.0,52.94,62.5,2,5.0,6505.23
+Fraudulent Company or Invoice Scam,178,14,17.0,56.1,66.67,1,2.0,4607.5725
+High-Risk Jurisdiction Layering,251,9,12.0,52.5,62.5,1,4.0,7478.110000000001
+Illegal Gold or Precious Metals,120,11,14.0,55.0,64.64,2,5.0,9058.135
+Intermediary / Trust Account Abuse,159,9,19.0,53.04,62.5,1,5.0,5065.97
+Motor Vehicle or High-Value Goods Purchase,105,15,19.0,54.69,65.38,1,7.0,12170.759999999998
+Mule Account / Rapid Pass-Through,246,12,15.0,58.82,70.0,1,2.0,1423.005
+NPO / Community Organisation Misuse,113,10,15.0,52.94,61.11,2,5.0,4639.355
+Narcotics Cash Proceeds,264,18,23.0,64.29,75.0,1,5.0,5145.8
+Ponzi / Investment Scheme Collections,128,15,18.0,58.46,66.67,2,5.0,3780.1549999999997
+Procurement Corruption / Tender Kickback,239,14,17.0,52.41,62.5,2,6.0,8029.885
+Property / Real Estate Integration,116,13,17.0,52.63,61.88,2,6.0,13843.962500000001
+Shell or Front Company Flow,180,10,13.0,52.78,61.32,1,5.0,9277.15
+Stolen Student Loan or Grant Abuse,126,10,12.0,54.43,63.88,1,4.0,1200.8825
+Structuring / Smurfing Cash Deposits,377,10,13.0,52.46,61.9,1,5.0,7709.36
+Trade-Based Import-Export Layering,160,13,16.0,55.21,63.64,2,6.0,12234.9325

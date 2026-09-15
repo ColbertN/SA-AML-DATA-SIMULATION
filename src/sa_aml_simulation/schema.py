@@ -1,8 +1,8 @@
 """Canonical public schema for the final SA AML simulation export.
 
 This list is the contract shared by the simulator, the public CSV sample, and the
-feature-audit notebook.  Full audit columns remain available in the internal
-full export, but only these columns belong in the public final data view.
+feature-audit notebook. Diagnostic fields used for validation are derived at
+runtime and are not written as a second transaction file.
 """
 
 PUBLIC_FINAL_COLUMNS = (
@@ -135,9 +135,9 @@ PUBLIC_COLUMN_DESCRIPTIONS = {
     "Transaction_id": "Unique synthetic identifier for the transaction; it is not a real banking identifier.",
     "Time": "Synthetic transaction time of day, including salary or grant timing, routine spending periods, and rapid AML episodes.",
     "Date": "Calendar date on which the synthetic transaction occurs within the observation window.",
-    "Account_id": "Synthetic identifier for the monitored receiver account used to group transaction histories.",
-    "Sender_account": "Synthetic 9 to 11 digit account number on the sending side of the transaction.",
-    "Receiver_account": "Synthetic 9 to 11 digit account number on the receiving side of the transaction.",
+    "Account_id": "Synthetic identifier for one monitored account profile used to group that profile's transaction history. It is a profile key, not a transaction endpoint and not a synonym for Receiver_account.",
+    "Sender_account": "Synthetic 9 to 11 digit account number identifying the sending endpoint on this transaction. It may be the monitored Account_id profile or an external synthetic endpoint.",
+    "Receiver_account": "Synthetic 9 to 11 digit account number identifying the receiving endpoint on this transaction. It may be the monitored Account_id profile or an external synthetic endpoint; it is not the profile key itself.",
     "Counterparty_account": "Synthetic account number for the counterparty associated with the monitored transaction; repeated values support network analysis.",
     "Direction": "Transaction direction relative to the monitored account: Inflow or Outflow.",
     "Amount": "Positive synthetic transaction value generated from customer profile, payment rail, timing, and behaviour distributions.",
@@ -152,7 +152,7 @@ PUBLIC_COLUMN_DESCRIPTIONS = {
     "Credit_card_indicator": "Binary indicator for credit-card context; it can occur in legitimate or suspicious activity.",
     "Procurement_payment_indicator": "Binary indicator for a procurement-related payment context; it does not by itself imply laundering.",
     "Virtual_asset_transaction_indicator": "Binary indicator that the transaction is associated with virtual-asset activity.",
-    "Counterparty_type": "Neutral functional role of the counterparty, such as household, merchant, employer, supplier, public sector, foreign, or financial service provider.",
+    "Counterparty_type": "Neutral functional role of the counterparty, such as household, merchant, employer, supplier, public sector, foreign, or financial service provider. The same functional categories are deliberately available to legitimate and suspicious transactions; the field does not name an AML typology.",
     "Cross_border_transaction": "Binary indicator that the transaction crosses national jurisdictions.",
     "SADC_corridor_transaction": "Binary indicator that the transaction uses a Southern African Development Community corridor.",
     "Jurisdiction_risk_tier": "Contextual jurisdiction tier derived from the synthetic countries and configured SADC or FATF groupings.",
@@ -196,9 +196,9 @@ PUBLIC_COLUMN_RULES = {
     "Transaction_id": "Assign a unique synthetic row identifier when transaction records are assembled.",
     "Time": "Sample from the account profile schedule, including salary or grant timing, ordinary spending windows, and typology-specific timing.",
     "Date": "Sample within the configured observation window after applying account activation and scenario scheduling rules.",
-    "Account_id": "Generate a unique random 9 to 11 digit synthetic account number for each monitored account.",
-    "Sender_account": "Select the sender endpoint from the monitored account or synthetic counterparty endpoint pool according to direction.",
-    "Receiver_account": "Select the receiver endpoint from the monitored account or synthetic counterparty endpoint pool according to direction.",
+    "Account_id": "Generate one unique random 9 to 11 digit profile key for each monitored account profile and repeat it on that profile's transaction rows.",
+    "Sender_account": "Select the sending endpoint from the monitored profile or the synthetic external-endpoint pool according to transaction direction.",
+    "Receiver_account": "Select the receiving endpoint from the monitored profile or the synthetic external-endpoint pool according to transaction direction; do not use its distinct count as the monitored-profile count.",
     "Counterparty_account": "Reuse or create a synthetic endpoint according to the customer's normal counterparties or the scenario network pattern.",
     "Direction": "Set relative to the monitored account from the selected sender and receiver endpoints.",
     "Amount": "Draw a positive amount from profile, payment-rail, timing, and scenario-specific distributions with realistic overlap between classes.",
@@ -213,7 +213,7 @@ PUBLIC_COLUMN_RULES = {
     "Credit_card_indicator": "Set from account or transaction credit-card context independently of the laundering label.",
     "Procurement_payment_indicator": "Set when the route or customer profile represents a procurement-related payment context.",
     "Virtual_asset_transaction_indicator": "Set when the payment route represents a virtual-asset transaction or off-ramp.",
-    "Counterparty_type": "Map the endpoint role to a neutral functional category; do not encode the AML scenario name in this field.",
+    "Counterparty_type": "Map the endpoint role to a neutral functional category shared across legitimate and suspicious activity; do not encode the AML scenario name, victim role, mule role, or typology name in this field.",
     "Cross_border_transaction": "Set to 1 when sender and receiver jurisdictions differ, otherwise set to 0.",
     "SADC_corridor_transaction": "Set to 1 when the route uses a configured SADC country corridor, otherwise set to 0.",
     "Jurisdiction_risk_tier": "Derive from the routed country using the configured domestic, SADC, increased-monitoring, and call-for-action groupings.",

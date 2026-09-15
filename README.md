@@ -63,28 +63,55 @@ The latest saved run in the local results directory has the following summary:
 | --- | ---: |
 | Observation period | 2024-01-01 to 2026-03-31 |
 | Observation days | 821 |
-| Receiver accounts | 35,000 |
+| Monitored Account_id profiles | 35,000 |
+| Unique Receiver_account endpoints | 138,279 |
+| Unique Sender_account endpoints | 139,461 |
 | Final simulation columns | 58 |
-| Full audit columns | 107 |
-| Transaction rows | 1,412,358 |
-| Average transactions per account | 40.35 |
-| Median transactions per account | 27 |
-| 95th percentile transactions per account | 126 |
-| Maximum transactions per account | 220 |
-| Legitimate transaction rows | 1,381,844 |
-| Suspicious AML transaction rows | 30,514 |
-| Legitimate accounts | 31,000 |
-| Suspicious AML accounts | 4,000 |
-| Transaction-level suspicious share | 2.16% |
-| Account-level suspicious share | 11.43% |
+| Raw simulator fields used for in-memory validation (not exported) | 107 |
+| Transaction rows | 1,441,479 |
+| Average transactions per Account_id profile | 41.19 |
+| Median transactions per Account_id profile | 27 |
+| 95th percentile transactions per Account_id profile | 127 |
+| Maximum transactions per Account_id profile | 220 |
+| Legitimate transaction rows | 1,338,358 |
+| Suspicious AML transaction rows | 103,121 |
+| Legitimate Account_id profiles | 31,000 |
+| Suspicious AML Account_id profiles | 4,000 |
+| Transaction-level suspicious share | 7.15% |
+| Account_id profile suspicious share | 11.43% |
 | AML scenarios represented | 22 |
 | Normal behaviour categories represented | 11 |
-| Cross-border transaction share | 14.78% |
-| FATF contextual exposure share | 5.91% |
+| Cross-border transaction share | 15.06% |
+| FATF contextual exposure share | 6.66% |
 
 Large generated datasets under `results/simulated_data/` are ignored by Git
 because full simulation files can exceed GitHub's normal file-size limit. They
 can be regenerated from the notebook or scripts.
+
+### Entity counts and modelling units
+
+The release contains several account-like fields. They are different entities
+and must not be read as interchangeable counts:
+
+| Entity | Normal | Suspicious / laundering | Total | Meaning |
+| --- | ---: | ---: | ---: | --- |
+| Account_id | 31,000 | 4,000 | 35,000 | Monitored synthetic profile key used to group one account profile's transaction history. |
+| Receiver_account | 134,246* | 38,994* | 138,279 | Unique receiving endpoints associated with normal or suspicious profiles; these are not the 35,000 monitored profiles. |
+| Sender_account | 135,328* | 36,175* | 139,461 | Unique sending endpoints associated with normal or suspicious profiles. |
+
+Most Account_id profiles are linked to multiple receiver endpoints in the
+downstream relationship audit. The current run reports an average of 22.52
+linked receiver endpoints per profile, 34,491 of 35,000 profiles with more
+than one linked receiver endpoint, and approximately 5.70 profile keys per
+receiver endpoint. The average is a relationship diagnostic, not the ratio of
+unique receiver IDs to unique profile IDs.
+
+*Endpoint class counts are non-exclusive because the same synthetic endpoint
+can appear in transactions associated with both legitimate and suspicious
+profiles. The union of those class-specific sets is the total endpoint count.
+For sequence modelling, the grouping unit must be declared explicitly: use
+`Account_id` for monitored customer histories or `Receiver_account` for
+receiving-endpoint histories; the two units answer different questions.*
 
 ## Selected Validation Views
 
@@ -97,10 +124,10 @@ can be inspected directly from the GitHub landing page.
 
 <p align="center">
   <img src="results/images/01_eda_overview/01a_transaction_label_imbalance.png" alt="Transaction-level label balance" width="48%">
-  <img src="results/images/01_eda_overview/01b_receiver_account_label_imbalance.png" alt="Account-level label balance" width="48%">
+  <img src="results/images/01_eda_overview/01b_receiver_account_label_imbalance.png" alt="Monitored Account_id profile label balance" width="48%">
 </p>
 
-The transaction-level and account-level views are shown together because their
+The transaction-level and monitored Account_id profile views are shown together because their
 shares are intentionally different. Suspicious accounts retain ordinary
 transactions, so the account label is not copied to every row in the account
 history.
@@ -258,7 +285,7 @@ The same simulation logic is available through the notebook and through
 
 The run starts by reading shared defaults from
 `src/sa_aml_simulation/config.py`. These define the output prefix, number of
-receiver accounts, target suspicious-account share, observation window, random
+monitored Account_id profiles, target suspicious-account share, observation window, random
 seed, maximum transaction cap per account and suspicious transaction probability
 scale.
 
@@ -268,7 +295,7 @@ which phase is running and how long each run takes.
 
 ### 2. Account Population Generation
 
-The simulator creates monitored receiver accounts. Each account receives a
+The simulator creates monitored Account_id profiles. Each profile receives a
 synthetic identity and profile variables including customer type, province,
 employment status, employment sector, income band, estimated monthly income,
 age, age band, gender, education level, nationality, residency status,
@@ -332,11 +359,24 @@ therefore represented by structured fields and temporal/payment patterns.
 
 ### 7. Suspicious Typology Engine
 
-Accounts selected as laundering accounts receive one AML typology. The typology
-does not convert every transaction on that account into a suspicious
-transaction. Suspicious events are overlaid inside otherwise ordinary account
-activity, so a laundering account can still have salary, grocery, grant,
-business, remittance or normal retail transactions.
+Accounts selected as laundering accounts receive one AML typology. The
+typology does not convert every transaction on that account into a suspicious
+transaction: ordinary salary, grocery, grant, business, remittance and retail
+rows remain in the history. However, the suspicious component is deliberately
+dominant rather than incidental. The generator creates typology-specific
+episodes whose suspicious share is above 50% for every AML scenario, typically
+about 53--82%, while retaining ordinary rows for behavioural overlap and
+realistic account context.
+
+This design gives sequential models enough repeated evidence to learn timing,
+amount, direction, payment-rail and counterparty transitions. It also avoids
+making one isolated transaction the sole representation of an AML account.
+Rapid cash-flow scenarios use short deposit-to-withdrawal or transfer gaps;
+structuring, invoice, Ponzi, casino and high-value-goods scenarios retain
+repeated amount motifs; cross-border, trade and crypto scenarios retain route
+and payment context. These patterns are generated in the raw rows so they can
+be reconstructed by modelling or analysis without exporting rolling or
+sequence-engineered features.
 
 Scenario assignment is context-weighted:
 
@@ -395,6 +435,14 @@ can derive those features from the retained raw fields for their own study
 design. The separate sample CSV contains the same columns and is provided for
 quick inspection only.
 
+The insight outputs also include `scenario_profile_behaviour.csv`, which reports
+the suspicious-event count and share within each positive typology profile, and
+`context_overlap_audit.csv`, which verifies that neutral counterparty and
+jurisdiction categories are not suspicious-only shortcuts. The
+`cash_flow_episode_audit.csv` table summarises the cash-deposit, cash-
+withdrawal, EFT, direction-alternation and short-lag evidence generated for
+the cash-courier and narcotics typologies.
+
 ### Final 58-Column Data Dictionary
 
 The final public file has exactly **58 columns**. The target and
@@ -419,9 +467,9 @@ dictionary for the final export.
 | `Transaction_id` | Unique synthetic transaction identifier. | Sequential simulation identifier; not a bank-account number. |
 | `Time` | Time of day at which the transaction occurs. | `HH:MM:SS`; includes midnight salary/grant timing, working-day spending, and rapid AML episodes. |
 | `Date` | Calendar date of the transaction. | Date within the configured observation window. |
-| `Account_id` | Monitored receiver-account key used to group each account history. | Unique synthetic 9--11 digit account number. |
-| `Sender_account` | Account from which the transaction is sent. | Unique synthetic 9--11 digit account number; may be the monitored account or an external counterparty. |
-| `Receiver_account` | Account receiving the transaction. | Unique synthetic 9--11 digit account number; may be the monitored account or an external counterparty. |
+| `Account_id` | Monitored synthetic profile key used to group one profile's transaction history. It is not a transaction endpoint and is not a synonym for `Receiver_account`. | One unique synthetic 9--11 digit key per monitored profile, repeated on that profile's transaction rows. |
+| `Sender_account` | Sending endpoint on the transaction. | Synthetic 9--11 digit endpoint; may be the monitored profile or an external synthetic endpoint. |
+| `Receiver_account` | Receiving endpoint on the transaction. | Synthetic 9--11 digit endpoint; may be the monitored profile or an external synthetic endpoint. Its distinct count is not the monitored-profile count. |
 | `Counterparty_account` | Counterparty account associated with the monitored transaction. | Reused synthetic account numbers allow repeated counterparties and network patterns without real identifiers. |
 | `Direction` | Movement direction relative to the monitored account. | `Inflow` or `Outflow`. |
 | `Amount` | Transaction value in the relevant payment currency. | Positive simulated amount generated from profile, behaviour, timing, rail, and scenario distributions. |
@@ -652,9 +700,9 @@ easy to infer:
   the clean export.
 - `High_risk_sector_category` and `High_risk_person_type` are retained as
   contextual categories; their redundant binary flags are excluded.
-- Beneficial-ownership opacity is kept in the full audit metadata but excluded
-  from the clean export because it is a label-adjacent risk-control field rather
-  than an ordinary transaction observation.
+- Beneficial-ownership opacity is used only for in-memory validation and is not
+  exported because it is a label-adjacent risk-control field rather than an
+  ordinary transaction observation.
 - Migration-worker and residency-status fields are excluded from the clean
   export because they are difficult to verify consistently from ordinary bank
   transaction records.
@@ -709,10 +757,10 @@ Regenerate figures and insight tables from the default simulation CSV:
 python scripts/save_figures.py
 ```
 
-Use a specific simulation CSV:
+Use a specific public simulation CSV:
 
 ```powershell
-python scripts/save_figures.py --input-csv results/insights/feature_audit/SA_SAML_D_full_audit.csv
+python scripts/save_figures.py --input-csv results/simulated_data/SA_SAML_D.csv
 ```
 
 Regenerate tables only:

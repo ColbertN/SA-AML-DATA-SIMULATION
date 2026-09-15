@@ -1,0 +1,23 @@
+Feature,Category,Legitimate_rows,Suspicious_rows,Present_in_both_classes,Suspicious_only
+Counterparty_type,Business customer,79861,16395,1,0
+Counterparty_type,Business supplier,61074,16693,1,0
+Counterparty_type,Employer or payroll counterparty,67286,0,0,0
+Counterparty_type,Financial service provider,47933,7218,1,0
+Counterparty_type,Foreign counterparty,193160,11559,1,0
+Counterparty_type,Household or business counterparty,189436,19051,1,0
+Counterparty_type,Household or merchant,148126,0,0,0
+Counterparty_type,Household or peer counterparty,13909,11592,1,0
+Counterparty_type,Public or municipal service provider,2748,0,0,0
+Counterparty_type,Public sector counterparty,3958,3244,1,0
+Counterparty_type,Public sector or grant payer,16375,2553,1,0
+Counterparty_type,Retail customer,201941,0,0,0
+Counterparty_type,Retail merchant,58132,9129,1,0
+Counterparty_type,Retail or peer counterparty,143100,0,0,0
+Counterparty_type,Savings group,3049,0,0,0
+Counterparty_type,Trade or logistics counterparty,20646,5687,1,0
+Counterparty_type,Transport customer,87624,0,0,0
+Jurisdiction_risk_tier,Domestic,1145198,79251,1,0
+Jurisdiction_risk_tier,FATF Call for Action,13676,2090,1,0
+Jurisdiction_risk_tier,FATF Increased Monitoring,70175,10081,1,0
+Jurisdiction_risk_tier,Other international,9574,1074,1,0
+Jurisdiction_risk_tier,SADC corridor,99735,10625,1,0

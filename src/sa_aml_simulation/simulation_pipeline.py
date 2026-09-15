@@ -39,7 +39,6 @@ from src.sa_aml_simulation.config import (
 )
 from src.sa_aml_simulation.paths import (
     FINAL_RESULTS_DIR,
-    FEATURE_AUDIT_DIR,
     FULL_SAML_DIR,
     INSIGHTS_DIR,
     PROJECT_ROOT,
@@ -74,7 +73,7 @@ def run_simulation() -> dict:
     # PARAMETERS AND CONTEXT TABLES
     # ============================================================
 
-    # The full-scale default uses more monitored receiver accounts and covers
+    # The full-scale default uses more monitored Account_id profiles and covers
     # 2024-01-01 through 2026-03-31. Override these with environment variables
     # when running quick smoke tests or larger experiments.
     N_RECEIVER_ACCOUNTS = int(os.getenv("AML_SIM_N_ACCOUNTS", str(DEFAULT_N_RECEIVER_ACCOUNTS)))
@@ -410,9 +409,9 @@ def run_simulation() -> dict:
     }
 
     LAUNDERING_TYPES = list(AML_SCENARIO_CATALOG.keys())
-    # Suspicious accounts keep their ordinary customer activity. Only a minority
-    # of their transactions receive the typology overlay so account labels are not
-    # trivially recoverable from transaction volume or a single transaction row.
+    # Suspicious accounts keep ordinary customer activity, but their typology
+    # component is generated as a dominant sequence of observable episodes.
+    # Profile selection remains contextual and is not copied into each row.
     TYPOLOGY_TX_PROB = {
         name: float(np.clip(meta["tx_prob"] * SUSPICIOUS_TX_PROB_SCALE, 0.04, 0.16))
         for name, meta in AML_SCENARIO_CATALOG.items()
@@ -566,7 +565,10 @@ def run_simulation() -> dict:
         return max(monthly_income, cash_turnover, customer_floor, 1_000.0)
 
 
-    def shared_account_conditioned_amount(acc, direction, payment_type, requested_amount):
+    def shared_account_conditioned_amount(
+        acc, direction, payment_type, requested_amount,
+        suspicious=False, typology=None,
+    ):
         """Blend scenario amounts with a common, profile-conditioned distribution.
 
         The scenario still influences the tail, but it no longer supplies a unique
@@ -594,7 +596,20 @@ def run_simulation() -> dict:
         requested = max(float(requested_amount), 10.0)
         # Keep a wider tail for both classes. AML scenarios influence the tail,
         # but the common draw remains the dominant component.
-        requested_weight = 0.28 if rng.random() < 0.18 else 0.16
+        if suspicious:
+            # Suspicious episodes retain customer-scale overlap, but their
+            # repeated amount motif must survive into the raw sequence. The
+            # model should learn a pattern of amounts, not a single hard band.
+            requested_weight = 0.42 if typology in {
+                "Structuring / Smurfing Cash Deposits",
+                "Ponzi / Investment Scheme Collections",
+                "Fraudulent Company or Invoice Scam",
+                "Casino or Gambling Laundering",
+                "Narcotics Cash Proceeds",
+                "Motor Vehicle or High-Value Goods Purchase",
+            } else 0.34
+        else:
+            requested_weight = 0.28 if rng.random() < 0.18 else 0.16
         blended = np.exp(
             (1.0 - requested_weight) * np.log(shared) +
             requested_weight * np.log(requested)
@@ -638,16 +653,42 @@ def run_simulation() -> dict:
     def choose_transaction_country(acc, force_foreign=False, suspicious=False):
         if suspicious:
             roll = rng.random()
-            if roll < 0.52:
+            # Suspicious transactions can use high-risk or international routes,
+            # but the route itself is not the label. Retain overlap with the
+            # customer's ordinary corridor and with domestic activity.
+            if roll < 0.16 and getattr(acc, "Has_cross_border_links", 0):
+                typical = getattr(acc, "Typical_foreign_counterparty_country", SA)
+                if typical != SA:
+                    return typical
+            if roll < 0.50:
                 return draw_one(SADC_CORRIDORS)
-            if roll < 0.88:
+            if roll < 0.75:
                 return draw_one(FATF_INCREASED_MONITORING)
-            if roll < 0.96:
+            if roll < 0.86:
+                return draw_one(FATF_CALL_FOR_ACTION)
+            if roll < 0.92:
+                return draw_one(OTHER_RELEVANT_COUNTRIES)
+            return SA
+        if force_foreign or acc.Has_cross_border_links:
+            roll = rng.random()
+            if roll < 0.62 and acc.Typical_foreign_counterparty_country != SA:
+                return acc.Typical_foreign_counterparty_country
+            if roll < 0.80:
+                return draw_one(SADC_CORRIDORS)
+            if roll < 0.91:
+                return draw_one(FATF_INCREASED_MONITORING)
+            if roll < 0.95:
                 return draw_one(FATF_CALL_FOR_ACTION)
             return draw_one(OTHER_RELEVANT_COUNTRIES)
-        if force_foreign or acc.Has_cross_border_links:
-            return acc.Typical_foreign_counterparty_country if acc.Typical_foreign_counterparty_country != SA else draw_one(SADC_CORRIDORS)
-        if rng.random() < 0.03:
+        # A small amount of ordinary international exposure is retained even
+        # for profiles without a foreign-corridor flag.  Use one categorical
+        # draw so these contextual categories overlap both classes cleanly.
+        roll = rng.random()
+        if roll < 0.018:
+            return draw_one(FATF_INCREASED_MONITORING)
+        if roll < 0.030:
+            return draw_one(OTHER_RELEVANT_COUNTRIES)
+        if roll < 0.060:
             return draw_one(SADC_CORRIDORS)
         return SA
 
@@ -1011,8 +1052,8 @@ def run_simulation() -> dict:
         multiplier *= 1 + 0.35 * row.Cash_intensity_score
         multiplier *= 1 + 0.20 * int(row.Uses_personal_account_for_business == 1)
         # Do not inflate transaction counts merely because an account is suspicious.
-        # Suspicious behaviour is injected as a minority overlay inside the ordinary
-        # account history, which avoids direct count-based target leakage.
+        # The typology-specific minimum below only ensures that its behavioural
+        # episode can be observed; ordinary profiles still overlap in count.
         return float(np.clip(multiplier, 0.18, 1.70))
 
 
@@ -1040,6 +1081,11 @@ def run_simulation() -> dict:
             min_tx = 2
         else:
             min_tx = 1
+        if int(getattr(acc, "Account_is_laundering", 0)):
+            # Every suspicious profile needs enough history for its behavioural
+            # episode to be visible. This avoids positive accounts with only one
+            # or two isolated labelled transactions.
+            min_tx = max(min_tx, min(suspicious_minimum_transactions(acc.Laundering_type), MAX_TX_PER_ACCOUNT))
         count = max(min_tx, count)
         if count > MAX_TX_PER_ACCOUNT:
             upper_tail_floor = max(min_tx, int(MAX_TX_PER_ACCOUNT * rng.uniform(0.68, 0.90)))
@@ -1297,6 +1343,7 @@ def run_simulation() -> dict:
         "Ponzi / Investment Scheme Collections",
         "Stolen Student Loan or Grant Abuse",
         "Crypto Asset Off-Ramp",
+        "Casino or Gambling Laundering",
     }
 
     LAYERING_SUSPICIOUS_TYPOLOGIES = {
@@ -1315,9 +1362,43 @@ def run_simulation() -> dict:
         "Illegal Gold or Precious Metals",
         "Environmental or Wildlife Crime Proceeds",
         "NPO / Community Organisation Misuse",
-        "Casino or Gambling Laundering",
+    }
+
+    CASH_FLOW_SUSPICIOUS_TYPOLOGIES = {
         "Cash Courier / Bulk Cash Movement",
         "Narcotics Cash Proceeds",
+    }
+
+    # Suspicious profiles contain ordinary activity as well as laundering, but
+    # the laundering component must be the dominant component of the history.
+    # This prevents a positive account from being represented by only one or
+    # two suspicious rows hidden among ordinary activity. Values are (minimum
+    # total transactions, minimum suspicious events, minimum share, maximum
+    # share, preferred episodes). The minimum share is above 0.50 for every
+    # typology; ordinary rows remain to preserve realistic mixed histories.
+    SUSPICIOUS_ACTIVITY_PROFILE = {
+        "Structuring / Smurfing Cash Deposits": (18, 10, 0.52, 0.70, 2),
+        "Cash Courier / Bulk Cash Movement": (24, 14, 0.58, 0.78, 2),
+        "Mule Account / Rapid Pass-Through": (20, 12, 0.58, 0.78, 2),
+        "Cross-Border Layering via SADC Corridor": (18, 10, 0.52, 0.70, 2),
+        "High-Risk Jurisdiction Layering": (16, 9, 0.52, 0.68, 2),
+        "Intermediary / Trust Account Abuse": (16, 9, 0.52, 0.68, 2),
+        "Procurement Corruption / Tender Kickback": (24, 14, 0.52, 0.70, 2),
+        "Shell or Front Company Flow": (18, 10, 0.52, 0.68, 2),
+        "Complex Legal Structure / Beneficial Ownership Obfuscation": (18, 10, 0.52, 0.68, 2),
+        "Crypto Asset Off-Ramp": (18, 11, 0.56, 0.74, 2),
+        "Ponzi / Investment Scheme Collections": (24, 14, 0.58, 0.76, 3),
+        "Fraudulent Company or Invoice Scam": (24, 14, 0.56, 0.74, 2),
+        "Cybercrime Proceeds": (20, 12, 0.58, 0.76, 2),
+        "Narcotics Cash Proceeds": (28, 18, 0.64, 0.82, 2),
+        "Illegal Gold or Precious Metals": (20, 11, 0.54, 0.70, 2),
+        "Environmental or Wildlife Crime Proceeds": (18, 10, 0.52, 0.68, 2),
+        "Stolen Student Loan or Grant Abuse": (18, 10, 0.54, 0.70, 2),
+        "Casino or Gambling Laundering": (24, 15, 0.60, 0.78, 3),
+        "Property / Real Estate Integration": (24, 13, 0.52, 0.68, 2),
+        "Motor Vehicle or High-Value Goods Purchase": (26, 15, 0.54, 0.72, 2),
+        "Trade-Based Import-Export Layering": (22, 13, 0.54, 0.72, 2),
+        "NPO / Community Organisation Misuse": (18, 10, 0.52, 0.68, 2),
     }
 
 
@@ -1345,6 +1426,8 @@ def run_simulation() -> dict:
     def suspicious_gap_minutes(typology):
         if typology in RAPID_SUSPICIOUS_TYPOLOGIES:
             return float(np.clip(rng.lognormal(np.log(24), 1.05), 3, 240))
+        if typology in CASH_FLOW_SUSPICIOUS_TYPOLOGIES:
+            return float(np.clip(rng.lognormal(np.log(42), 0.90), 4, 360))
         if typology in MODERATE_SUSPICIOUS_TYPOLOGIES:
             return float(np.clip(rng.lognormal(np.log(75), 1.00), 5, 480))
         if typology in LAYERING_SUSPICIOUS_TYPOLOGIES:
@@ -1357,6 +1440,8 @@ def run_simulation() -> dict:
     def suspicious_cluster_probability(typology):
         if typology in RAPID_SUSPICIOUS_TYPOLOGIES:
             return 0.62
+        if typology in CASH_FLOW_SUSPICIOUS_TYPOLOGIES:
+            return 0.70
         if typology in MODERATE_SUSPICIOUS_TYPOLOGIES:
             return 0.55
         if typology in LAYERING_SUSPICIOUS_TYPOLOGIES:
@@ -1424,34 +1509,66 @@ def run_simulation() -> dict:
         return candidates[int(rng.integers(0, len(candidates)))]
 
 
-    def suspicious_episode_length(typology, remaining_transactions):
-        if typology in {
-            "Mule Account / Rapid Pass-Through",
-            "Cash Courier / Bulk Cash Movement",
-            "Cybercrime Proceeds",
-        } and remaining_transactions >= 60 and rng.random() < 0.18:
-            return int(min(remaining_transactions, rng.choice([40, 70, 100, 120])))
-        if typology in {
-            "Mule Account / Rapid Pass-Through",
-            "Cash Courier / Bulk Cash Movement",
-        }:
-            return int(rng.choice([2, 3, 5, 8, 12], p=[0.20, 0.28, 0.25, 0.18, 0.09]))
-        if typology in {
-            "Ponzi / Investment Scheme Collections",
-            "Fraudulent Company or Invoice Scam",
-            "Procurement Corruption / Tender Kickback",
-        }:
-            return int(rng.choice([2, 3, 5, 8], p=[0.28, 0.34, 0.26, 0.12]))
-        return int(rng.choice([1, 2, 3, 4], p=[0.42, 0.32, 0.18, 0.08]))
+    def suspicious_minimum_transactions(typology):
+        return int(SUSPICIOUS_ACTIVITY_PROFILE.get(typology, (16, 6, 0.20, 0.35, 2))[0])
+
+
+    def choose_suspicious_positions(acc, n_tx):
+        """Choose coherent suspicious episodes within one Account_id history.
+
+        The positions are internal generation state only. The public data keeps
+        the transaction label, but not the planned episode boundaries. Several
+        separated episodes preserve ordinary behaviour while ensuring that a
+        suspicious profile is not represented by one accidental row.
+        """
+        if not int(getattr(acc, "Account_is_laundering", 0)) or n_tx <= 0:
+            return set()
+        _minimum_total, minimum_events, minimum_share, maximum_share, preferred_episodes = (
+            SUSPICIOUS_ACTIVITY_PROFILE.get(acc.Laundering_type, (16, 6, 0.20, 0.35, 2))
+        )
+        target_share = float(rng.uniform(minimum_share, maximum_share))
+        target_events = max(int(minimum_events), int(np.ceil(n_tx * target_share)))
+        target_events = min(int(n_tx), target_events)
+        if target_events <= 0:
+            return set()
+
+        episode_count = min(
+            int(preferred_episodes),
+            max(1, target_events // 4),
+            max(1, n_tx // 6),
+        )
+        episode_count = max(1, episode_count)
+        block_sizes = [target_events // episode_count] * episode_count
+        for i in range(target_events % episode_count):
+            block_sizes[i] += 1
+
+        positions = set()
+        if episode_count == 1:
+            centres = [float(rng.uniform(0.25, 0.75))]
+        else:
+            centres = np.linspace(0.18, 0.82, episode_count)
+            centres = np.clip(centres + rng.normal(0.0, 0.045, episode_count), 0.05, 0.95)
+        for centre, block_size in zip(centres, block_sizes):
+            block_size = max(1, int(block_size))
+            start = int(round(float(centre) * max(n_tx - 1, 0) - block_size / 2))
+            start = max(0, min(start, n_tx - block_size))
+            positions.update(range(start, start + block_size))
+
+        # Overlap is possible when a short history has several episodes. Fill
+        # any missing positions from the remaining chronological slots.
+        if len(positions) < target_events:
+            remaining = [i for i in range(n_tx) if i not in positions]
+            positions.update(remaining[: target_events - len(positions)])
+        return positions
 
 
     # ============================================================
     # GENERATE CUSTOMER / ACCOUNT PROFILES
     # ============================================================
     print("\n" + "="*100)
-    print(" PHASE 1: GENERATING RECEIVER ACCOUNT PROFILES")
+    print(" PHASE 1: GENERATING MONITORED ACCOUNT PROFILES")
     print("="*100)
-    print(f" Creating {N_RECEIVER_ACCOUNTS:,} receiver account profiles...")
+    print(f" Creating {N_RECEIVER_ACCOUNTS:,} monitored Account_id profiles...")
     print(f"   - Target AML contamination: {AML_ACCOUNT_SHARE_TARGET*100:.1f}%")
     print(f"   - Simulation period: {START_DATE.date()} to {END_DATE.date()} ({DAYS} days)")
     print()
@@ -1955,7 +2072,9 @@ def run_simulation() -> dict:
 
 
     COUNTERPARTY_TYPE_NEUTRAL_MAP = {
-        "Family or remittance counterparty": "Household or peer counterparty",
+        # Keep the public role category neutral: this is also used by
+        # suspicious cross-border and layering episodes.
+        "Family or remittance counterparty": "Foreign counterparty",
         "Supplier or household": "Household or business counterparty",
         "Household or merchant": "Household or merchant",
         "Retail merchant or peer": "Retail or peer counterparty",
@@ -1982,10 +2101,10 @@ def run_simulation() -> dict:
         "Shell company, trust or opaque beneficial-owner entity": "Business customer",
         "Municipal service provider": "Public or municipal service provider",
         "FATF-monitored foreign counterparty": "Foreign counterparty",
-        "Peer or mule network account": "Peer or household counterparty",
+        "Peer or mule network account": "Household or peer counterparty",
         "Virtual asset service provider": "Financial service provider",
         "Intermediary, attorney trust or connected-party account": "Financial service provider",
-        "Cybercrime victim, mule or cash-out account": "Peer or household counterparty",
+        "Cybercrime victim, mule or cash-out account": "Household or peer counterparty",
         "Import/export or trade counterparty": "Trade or logistics counterparty",
         "Retail investor or promoter account": "Business customer",
         "Precious metals dealer or smuggling intermediary": "Retail merchant",
@@ -1999,7 +2118,7 @@ def run_simulation() -> dict:
         "Subcontractor": "Business supplier",
         "Victim company": "Business customer",
         "Invoice-scam beneficiary": "Business customer",
-        "Rapid onward-payment account": "Peer or household counterparty",
+        "Rapid onward-payment account": "Household or peer counterparty",
     }
 
 
@@ -2298,9 +2417,17 @@ def run_simulation() -> dict:
             counterparty_type = "Cash courier or related individual"
 
         elif typology == "Cash Courier / Bulk Cash Movement":
-            direction = draw_one(["Inflow", "Outflow"], [0.64, 0.36])
-            amount = lognormal_amount(58_000, 0.82, 18_000, 240_000)
-            payment_type = draw_one(["Cash Deposit", "Cash Withdrawal"], [0.62, 0.38])
+            if episode_step > 0 and prior_suspicious_direction == "Inflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.18, 0.82])
+            elif episode_step > 0 and prior_suspicious_direction == "Outflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.72, 0.28])
+            else:
+                direction = draw_one(["Inflow", "Outflow"], [0.68, 0.32])
+            amount = lognormal_amount(42_000, 0.88, 3_000, 240_000)
+            if direction == "Inflow":
+                payment_type = draw_one(["Cash Deposit", "Electronic Transfer"], [0.78, 0.22])
+            else:
+                payment_type = draw_one(["Cash Withdrawal", "Electronic Transfer"], [0.68, 0.32])
             counterparty_type = "Bulk cash courier or cash-intensive third party"
 
         elif typology == "Mule Account / Rapid Pass-Through":
@@ -2422,9 +2549,19 @@ def run_simulation() -> dict:
             counterparty_type = "Cybercrime victim, mule or cash-out account"
 
         elif typology == "Narcotics Cash Proceeds":
-            direction = draw_one(["Inflow", "Outflow"], [0.70, 0.30])
-            amount = lognormal_amount(12_500, 1.00, 300, 49_999)
-            payment_type = draw_one(["Cash Deposit", "Cash Withdrawal", "Electronic Transfer"], [0.62, 0.22, 0.16])
+            # Repeated cash placement followed by cash-out is the central
+            # sequence motif; a smaller EFT component represents onward movement.
+            if episode_step > 0 and prior_suspicious_direction == "Inflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.16, 0.84])
+            elif episode_step > 0 and prior_suspicious_direction == "Outflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.76, 0.24])
+            else:
+                direction = draw_one(["Inflow", "Outflow"], [0.74, 0.26])
+            amount = lognormal_amount(9_500, 0.82, 250, 49_999)
+            if direction == "Inflow":
+                payment_type = draw_one(["Cash Deposit", "Electronic Transfer"], [0.82, 0.18])
+            else:
+                payment_type = draw_one(["Cash Withdrawal", "Electronic Transfer", "Cash Deposit"], [0.62, 0.28, 0.10])
             counterparty_type = "Cash-intensive retail front or courier"
 
         elif typology == "Illegal Gold or Precious Metals":
@@ -2460,9 +2597,17 @@ def run_simulation() -> dict:
             public_sector_counterparty = int(direction == "Inflow" and rng.random() < 0.44)
 
         elif typology == "Casino or Gambling Laundering":
-            direction = draw_one(["Inflow", "Outflow"], [0.50, 0.50])
-            amount = lognormal_amount(15_000, 1.10, 500, 260_000)
-            payment_type = draw_one(["Cash Deposit", "Cash Withdrawal", "Electronic Transfer", "Card Payment"], [0.30, 0.24, 0.30, 0.16])
+            if episode_step > 0 and prior_suspicious_direction == "Inflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.28, 0.72])
+            elif episode_step > 0 and prior_suspicious_direction == "Outflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.70, 0.30])
+            else:
+                direction = draw_one(["Inflow", "Outflow"], [0.46, 0.54])
+            amount = lognormal_amount(11_000, 0.88, 300, 260_000)
+            if direction == "Inflow":
+                payment_type = draw_one(["Electronic Transfer", "Cash Deposit", "Card Payment"], [0.46, 0.30, 0.24])
+            else:
+                payment_type = draw_one(["Card Payment", "Electronic Transfer", "Cash Withdrawal", "Cash Deposit"], [0.38, 0.32, 0.20, 0.10])
             credit_card_indicator = int(payment_type == "Card Payment" and rng.random() < 0.18)
             counterparty_type = "Casino, betting wallet or gambling value instrument"
 
@@ -2479,8 +2624,13 @@ def run_simulation() -> dict:
                     receiver_country = foreign_country
 
         elif typology == "Motor Vehicle or High-Value Goods Purchase":
-            direction = draw_one(["Inflow", "Outflow"], [0.36, 0.64])
-            amount = lognormal_amount(125_000, 0.90, 35_000, 1_400_000)
+            if episode_step > 0 and prior_suspicious_direction == "Inflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.22, 0.78])
+            elif episode_step > 0 and prior_suspicious_direction == "Outflow":
+                direction = draw_one(["Inflow", "Outflow"], [0.42, 0.58])
+            else:
+                direction = draw_one(["Inflow", "Outflow"], [0.38, 0.62])
+            amount = lognormal_amount(125_000, 0.86, 35_000, 1_400_000)
             payment_type = draw_one(["Electronic Transfer", "Cash Deposit", "Cash Withdrawal"], [0.58, 0.30, 0.12])
             counterparty_type = "Motor vehicle or high-value goods dealer"
 
@@ -2518,6 +2668,9 @@ def run_simulation() -> dict:
             "Ponzi / Investment Scheme Collections",
             "Fraudulent Company or Invoice Scam",
             "Structuring / Smurfing Cash Deposits",
+            "Casino or Gambling Laundering",
+            "Narcotics Cash Proceeds",
+            "Motor Vehicle or High-Value Goods Purchase",
         }:
             amount = float(np.exp(
                 0.52 * np.log(max(float(episode_anchor_amount), 10.0)) +
@@ -2544,7 +2697,10 @@ def run_simulation() -> dict:
 
         # Retain the scenario's broad scale while sharing the same customer- and
         # rail-conditioned amount process used by legitimate transactions.
-        amount = shared_account_conditioned_amount(acc, direction, payment_type, amount)
+        amount = shared_account_conditioned_amount(
+            acc, direction, payment_type, amount,
+            suspicious=True, typology=typology,
+        )
 
         transaction_purpose_category = suspicious_purpose_category(typology, payment_type, counterparty_type)
         scenario_meta = AML_SCENARIO_CATALOG.get(typology, {})
@@ -2581,79 +2737,34 @@ def run_simulation() -> dict:
 
     total_accounts_to_generate = len(receiver_accounts)
     progress_every = max(total_accounts_to_generate // 10, 1)
-    _progress(f"Generating transaction histories for {total_accounts_to_generate:,} receiver accounts.")
+    _progress(f"Generating transaction histories for {total_accounts_to_generate:,} monitored Account_id profiles.")
 
     for account_number, acc in enumerate(receiver_accounts.itertuples(index=False), start=1):
         n_tx = draw_account_transaction_count(acc)
         generated_counts.append(n_tx)
-        suspicious_tx_probability = TYPOLOGY_TX_PROB.get(acc.Laundering_type, 0.0)
-
-        forced_suspicious_position = int(rng.integers(0, n_tx)) if acc.Account_is_laundering and n_tx > 0 else -1
+        planned_suspicious_positions = choose_suspicious_positions(acc, n_tx)
         previous_legitimate_datetime = None
         previous_suspicious_datetime = None
-        suspicious_episode_remaining = 0
         suspicious_episode_step = 0
         prior_suspicious_direction = None
         prior_suspicious_amount = None
         episode_anchor_amount = None
-        burst_remaining = 0
+        previous_suspicious_tx = False
         scenario_counterparty_pools = build_scenario_counterparty_pools()
 
         for tx_number in range(n_tx):
-            burst_start = bool(
-                acc.Account_is_laundering
-                and burst_remaining == 0
-                and suspicious_episode_remaining == 0
-                and tx_number < n_tx - 1
-                and acc.Laundering_type in {
-                    "Mule Account / Rapid Pass-Through",
-                    "Cash Courier / Bulk Cash Movement",
-                    "Cybercrime Proceeds",
-                }
-                and n_tx >= 60
-                and rng.random() < 0.18
-            )
-            if burst_start:
-                burst_remaining = suspicious_episode_length(acc.Laundering_type, n_tx - tx_number)
-                suspicious_episode_remaining = burst_remaining
-                suspicious_episode_step = 0
-                prior_suspicious_direction = None
-                prior_suspicious_amount = None
-                episode_anchor_amount = None
-
-            force_suspicious_for_account = bool(
-                acc.Account_is_laundering and tx_number == forced_suspicious_position
-            )
-            if suspicious_episode_remaining > 0:
-                episode_probability = min(
-                    0.42,
-                    max(0.12, suspicious_tx_probability * 2.6),
-                )
-            else:
-                episode_probability = suspicious_tx_probability
-            # A small number of accounts start an additional latent episode. The
-            # episode state is intentionally not exported as a feature; it shapes
-            # the observable order, timing and direction of ordinary-looking rows.
-            start_episode = bool(
-                acc.Account_is_laundering and
-                suspicious_episode_remaining == 0 and
-                rng.random() < 0.025
-            )
-            is_suspicious_tx = bool(
-                burst_remaining > 0 or
-                force_suspicious_for_account or
-                start_episode or
-                (acc.Account_is_laundering and rng.random() < episode_probability)
+            is_suspicious_tx = tx_number in planned_suspicious_positions
+            starts_episode = is_suspicious_tx and not previous_suspicious_tx
+            current_burst = bool(
+                is_suspicious_tx and previous_suspicious_tx and
+                acc.Laundering_type in RAPID_SUSPICIOUS_TYPOLOGIES
             )
             if is_suspicious_tx:
-                current_burst = burst_remaining > 0
-                if suspicious_episode_remaining == 0:
-                    suspicious_episode_remaining = suspicious_episode_length(
-                        acc.Laundering_type, n_tx - tx_number
-                    )
+                if starts_episode:
                     suspicious_episode_step = 0
                     prior_suspicious_amount = None
                     episode_anchor_amount = None
+                    previous_suspicious_datetime = None
                 tx_datetime = sample_suspicious_datetime(
                     acc,
                     acc.Laundering_type,
@@ -2679,23 +2790,17 @@ def run_simulation() -> dict:
                 if episode_anchor_amount is None:
                     episode_anchor_amount = transactions[-1][8]
                 suspicious_episode_step += 1
-                if current_burst:
-                    burst_remaining = max(0, burst_remaining - 1)
-                    suspicious_episode_remaining = burst_remaining
-                else:
-                    suspicious_episode_remaining = max(0, suspicious_episode_remaining - 1)
+                previous_suspicious_tx = True
             else:
                 tx_datetime = sample_legitimate_datetime(acc, previous_legitimate_datetime)
                 previous_legitimate_datetime = tx_datetime
                 transactions.append(generate_legitimate_transaction(acc, tx_id, tx_datetime=tx_datetime))
-                if suspicious_episode_remaining > 0 and rng.random() < 0.22:
-                    suspicious_episode_remaining = max(0, suspicious_episode_remaining - 1)
-                if suspicious_episode_remaining == 0:
-                    suspicious_episode_step = 0
-                    prior_suspicious_direction = None
-                    prior_suspicious_amount = None
-                    episode_anchor_amount = None
-                    burst_remaining = 0
+                previous_suspicious_tx = False
+                previous_suspicious_datetime = None
+                suspicious_episode_step = 0
+                prior_suspicious_direction = None
+                prior_suspicious_amount = None
+                episode_anchor_amount = None
             tx_id += 1
         if account_number % progress_every == 0 or account_number == total_accounts_to_generate:
             _progress(
@@ -2789,9 +2894,9 @@ def run_simulation() -> dict:
     ]
     # These fields are valid simulation outputs, but they duplicate another
     # retained field, are reproducible diagnostics, or describe an internal
-    # generation control. They are kept in the full labelled audit export and
-    # omitted from the clean behaviour-only view. Laundering_type is retained
-    # separately for scenario interpretation, but is not a model input.
+    # generation control. They are retained in memory for validation and
+    # omitted from the clean public view. Laundering_type is retained separately
+    # for scenario interpretation, but is not a model input.
     BEHAVIOUR_ONLY_DUPLICATE_OR_INTERNAL_COLUMNS = [
         "Debit_card_indicator", "Cash_intensity_score", "Cash_intensity_band", "Is_PEP", "Age_band",
         "Income_band", "Migrant_worker_flag", "Residency_status",
@@ -2809,8 +2914,8 @@ def run_simulation() -> dict:
         "KYC_strength", "First_observed_transaction_date", "Primary_social_grant_type",
     ]
     # The public export is deliberately a fixed contract.  Do not derive it
-    # from the full audit dataframe: that would make new diagnostic columns
-    # silently appear in the public CSV or public sample.
+    # from an expanded diagnostic dataframe: that would make new diagnostic
+    # columns silently appear in the public CSV or public sample.
     missing_public_columns = [col for col in PUBLIC_FINAL_COLUMNS if col not in df_final.columns]
     if missing_public_columns:
         raise RuntimeError(f"Public final schema columns are missing: {missing_public_columns}")
@@ -2818,10 +2923,10 @@ def run_simulation() -> dict:
 
     print("Total Transactions:", len(df))
     print("Transaction-level suspicious %:", round(df["Is_laundering"].mean(), 4))
-    print("Account-level laundering %:", round(receiver_accounts["Account_is_laundering"].mean(), 4))
+    print("Account_id profile laundering %:", round(receiver_accounts["Account_is_laundering"].mean(), 4))
     print("Simulation period:", START_DATE.date(), "to", END_DATE.date(), "days:", DAYS)
-    print("Unique monitored receiver accounts:", receiver_accounts["Receiver_account"].nunique())
-    print("Median generated transactions/account:", int(receiver_accounts["Generated_transaction_count"].median()))
+    print("Unique monitored Account_id profiles:", len(receiver_accounts))
+    print("Median generated transactions/Account_id profile:", int(receiver_accounts["Generated_transaction_count"].median()))
     print("Suspicious scenario categories represented:", df.loc[df["Is_laundering"] == 1, "AML_scenario_category"].nunique())
     print("Normal behaviour categories represented:", df.loc[df["Is_laundering"] == 0, "Normal_behavior_category"].nunique())
     print("Cross-border transaction %:", round(df["Cross_border_transaction"].mean(), 4))
@@ -3026,8 +3131,7 @@ def run_simulation() -> dict:
     SIMULATED_DATA_DIR = DATA_OUTPUT_ROOT
     FULL_SAML_DIR = SIMULATED_DATA_DIR
     FINAL_RESULTS_DIR = Path(os.getenv("AML_SIM_INSIGHTS_DIR", str(INSIGHTS_DIR)))
-    FEATURE_AUDIT_OUTPUT_DIR = Path(os.getenv("AML_SIM_FEATURE_AUDIT_DIR", str(FEATURE_AUDIT_DIR)))
-    for output_dir in [FULL_SAML_DIR, FINAL_RESULTS_DIR, FEATURE_AUDIT_OUTPUT_DIR]:
+    for output_dir in [FULL_SAML_DIR, FINAL_RESULTS_DIR]:
         output_dir.mkdir(parents=True, exist_ok=True)
     SAMPLE_ROWS = int(os.getenv("AML_SIM_SAMPLE_ROWS", "15"))
 
@@ -3047,24 +3151,28 @@ def run_simulation() -> dict:
         ])
 
         dataset_overview = pd.DataFrame([
-            ("Receiver accounts", int(df_final["Account_id"].nunique())),
+            ("Monitored Account_id profiles", int(df_final["Account_id"].nunique())),
+            ("Unique Receiver_account endpoints", int(df_final["Receiver_account"].nunique())),
+            ("Unique Sender_account endpoints", int(df_final["Sender_account"].nunique())),
             ("Transaction rows", int(len(df_final))),
             ("Final simulation columns", int(len(behaviour_export_columns))),
-            ("Full audit columns", int(len(raw_export_columns))),
-            ("Average transactions per account", round(float(len(df_final) / df_final["Account_id"].nunique()), 2)),
-            ("Median transactions per account", int(account_counts.median())),
-            ("95th percentile transactions per account", int(account_counts.quantile(0.95))),
-            ("Maximum transactions per account", int(account_counts.max())),
+            ("Raw simulator columns before public selection", int(len(raw_export_columns))),
+            ("Average transactions per Account_id profile", round(float(len(df_final) / df_final["Account_id"].nunique()), 2)),
+            ("Median transactions per Account_id profile", int(account_counts.median())),
+            ("95th percentile transactions per Account_id profile", int(account_counts.quantile(0.95))),
+            ("Maximum transactions per Account_id profile", int(account_counts.max())),
             ("Legitimate transaction rows", int((df_final["Is_laundering"] == 0).sum())),
             ("Suspicious AML transaction rows", int((df_final["Is_laundering"] == 1).sum())),
-            ("Legitimate accounts", int((account_level["Account_is_laundering"] == 0).sum())),
-            ("Suspicious AML accounts", int((account_level["Account_is_laundering"] == 1).sum())),
+            ("Legitimate Account_id profiles", int((account_level["Account_is_laundering"] == 0).sum())),
+            ("Suspicious AML Account_id profiles", int((account_level["Account_is_laundering"] == 1).sum())),
             ("Transaction-level suspicious share", f"{df_final['Is_laundering'].mean() * 100:.2f}%"),
-            ("Account-level suspicious share", f"{account_level['Account_is_laundering'].mean() * 100:.2f}%"),
+            ("Account_id profile suspicious share", f"{account_level['Account_is_laundering'].mean() * 100:.2f}%"),
         ], columns=["Metric", "Value"])
 
         validation_summary = pd.DataFrame([
-            ("Receiver accounts", int(df_final["Account_id"].nunique())),
+            ("Monitored Account_id profiles", int(df_final["Account_id"].nunique())),
+            ("Unique Receiver_account endpoints", int(df_final["Receiver_account"].nunique())),
+            ("Unique Sender_account endpoints", int(df_final["Sender_account"].nunique())),
             ("Transactions", int(len(df_final))),
             ("Observation window", f"{START_DATE.date()} to {END_DATE.date()}"),
             ("Target suspicious-account share", f"{AML_ACCOUNT_SHARE_TARGET * 100:.2f}%"),
@@ -3072,12 +3180,12 @@ def run_simulation() -> dict:
             ("Transaction-level suspicious share", f"{df_final['Is_laundering'].mean() * 100:.2f}%"),
             ("AML scenarios represented", int(df_final.loc[df_final["Is_laundering"] == 1, "AML_scenario_category"].nunique())),
             ("Normal behaviour categories represented", int(df_final.loc[df_final["Is_laundering"] == 0, "Normal_behavior_category"].nunique())),
-            ("Median transactions per account", int(account_counts.median())),
-            ("95th percentile transactions per account", int(account_counts.quantile(0.95))),
-            ("Maximum transactions per account", int(account_counts.max())),
+            ("Median transactions per Account_id profile", int(account_counts.median())),
+            ("95th percentile transactions per Account_id profile", int(account_counts.quantile(0.95))),
+            ("Maximum transactions per Account_id profile", int(account_counts.max())),
             ("Cross-border transaction share", f"{df_final['Cross_border_transaction'].mean() * 100:.2f}%"),
             ("FATF contextual exposure share", f"{fatf_mask.mean() * 100:.2f}%"),
-            ("Full audit columns retained", int(len(raw_export_columns))),
+            ("Raw simulator columns before public selection", int(len(raw_export_columns))),
             ("Clean final columns exported", int(len(behaviour_export_columns))),
         ], columns=["Metric", "Value"])
 
@@ -3217,8 +3325,141 @@ def run_simulation() -> dict:
         account_sequence_quantiles = account_counts.quantile([0, .25, .5, .75, .9, .95, .99, 1]).reset_index()
         account_sequence_quantiles.columns = ["Quantile", "Transactions_per_account"]
 
-        # Keep the column inventories aligned with the clean 58-column export;
-        # the full labelled audit CSV remains available separately.
+        # Account-level behaviour audit: every positive profile should contain
+        # a dominant, observable suspicious component, not a sparse label.
+        ordered_events = df_final.sort_values(
+            ["Account_id", "fulldatetime", "Transaction_id"]
+        )
+        previous_label = (
+            ordered_events.groupby("Account_id", observed=True)["Is_laundering"]
+            .shift(1)
+            .fillna(0)
+        )
+        ordered_events = ordered_events.assign(
+            suspicious_episode_start=(
+                (ordered_events["Is_laundering"] == 1)
+                & (previous_label == 0)
+            ).astype(int)
+        )
+        ordered_events["previous_direction"] = (
+            ordered_events.groupby("Account_id", observed=True)["Direction"]
+            .shift(1)
+        )
+        ordered_events["previous_scenario"] = (
+            ordered_events.groupby("Account_id", observed=True)["AML_scenario_category"]
+            .shift(1)
+        )
+        ordered_events["short_lag_alternating_pair"] = (
+            (ordered_events["Is_laundering"] == 1)
+            & (previous_label == 1)
+            & (ordered_events["AML_scenario_category"] == ordered_events["previous_scenario"])
+            & (ordered_events["Direction"] != ordered_events["previous_direction"])
+            & (ordered_events["time_since_last"] > 0)
+            & (ordered_events["time_since_last"] <= 24 * 60 * 60)
+        ).astype(int)
+        episode_counts = (
+            ordered_events.groupby("Account_id", observed=True)["suspicious_episode_start"]
+            .sum()
+            .rename("suspicious_episode_count")
+        )
+        profile_totals = (
+            df_final[df_final["Account_is_laundering"] == 1]
+            .groupby("Account_id", observed=True)
+            .agg(
+                total_transactions=("Transaction_id", "size"),
+                suspicious_transactions=("Is_laundering", "sum"),
+            )
+            .reset_index()
+        )
+        profile_scenarios = (
+            df_final[
+                (df_final["Account_is_laundering"] == 1)
+                & (df_final["Is_laundering"] == 1)
+            ]
+            .groupby("Account_id", observed=True)
+            .agg(
+                AML_scenario_category=("AML_scenario_category", "first"),
+                median_suspicious_amount=("Amount", "median"),
+            )
+            .reset_index()
+        )
+        positive_profile_rows = (
+            profile_totals
+            .merge(profile_scenarios, on="Account_id", how="inner")
+            .merge(episode_counts.reset_index(), on="Account_id", how="left")
+        )
+        positive_profile_rows["suspicious_share"] = (
+            positive_profile_rows["suspicious_transactions"]
+            / positive_profile_rows["total_transactions"]
+        )
+        scenario_profile_behaviour = (
+            positive_profile_rows.groupby("AML_scenario_category", observed=True)
+            .agg(
+                suspicious_profiles=("Account_id", "nunique"),
+                minimum_suspicious_transactions=("suspicious_transactions", "min"),
+                median_suspicious_transactions=("suspicious_transactions", "median"),
+                minimum_suspicious_share=("suspicious_share", "min"),
+                median_suspicious_share=("suspicious_share", "median"),
+                minimum_episode_count=("suspicious_episode_count", "min"),
+                median_episode_count=("suspicious_episode_count", "median"),
+                median_suspicious_amount=("median_suspicious_amount", "median"),
+            )
+            .reset_index()
+        )
+        scenario_profile_behaviour["minimum_suspicious_share"] = percent(
+            scenario_profile_behaviour["minimum_suspicious_share"]
+        )
+        scenario_profile_behaviour["median_suspicious_share"] = percent(
+            scenario_profile_behaviour["median_suspicious_share"]
+        )
+
+        # Context fields are intentionally not scenario labels.  This audit
+        # makes the overlap explicit and catches any future positive-only
+        # category introduced by a generator change.
+        context_overlap_rows = []
+        for context_column in ["Counterparty_type", "Jurisdiction_risk_tier"]:
+            counts = (
+                df_final.groupby([context_column, "Is_laundering"], dropna=False, observed=True)
+                .size()
+                .unstack(fill_value=0)
+            )
+            for category, row in counts.iterrows():
+                legitimate_count = int(row.get(0, 0))
+                suspicious_count = int(row.get(1, 0))
+                context_overlap_rows.append({
+                    "Feature": context_column,
+                    "Category": category,
+                    "Legitimate_rows": legitimate_count,
+                    "Suspicious_rows": suspicious_count,
+                    "Present_in_both_classes": int(legitimate_count > 0 and suspicious_count > 0),
+                    "Suspicious_only": int(legitimate_count == 0 and suspicious_count > 0),
+                })
+        context_overlap_audit = pd.DataFrame(context_overlap_rows)
+
+        cash_flow_typologies = [
+            "Cash Courier / Bulk Cash Movement",
+            "Narcotics Cash Proceeds",
+        ]
+        cash_flow_rows = ordered_events[
+            (ordered_events["Is_laundering"] == 1)
+            & ordered_events["AML_scenario_category"].isin(cash_flow_typologies)
+        ].copy()
+        cash_flow_episode_audit = (
+            cash_flow_rows.groupby("AML_scenario_category", observed=True)
+            .agg(
+                suspicious_transactions=("Transaction_id", "size"),
+                cash_deposit_transactions=("Payment_type", lambda s: int((s == "Cash Deposit").sum())),
+                cash_withdrawal_transactions=("Payment_type", lambda s: int((s == "Cash Withdrawal").sum())),
+                electronic_transfer_transactions=("Payment_type", lambda s: int((s == "Electronic Transfer").sum())),
+                inflow_transactions=("Direction", lambda s: int((s == "Inflow").sum())),
+                outflow_transactions=("Direction", lambda s: int((s == "Outflow").sum())),
+                short_lag_alternating_pairs=("short_lag_alternating_pair", "sum"),
+                median_gap_minutes=("time_since_last", lambda s: round(float(s[s > 0].median() / 60), 2) if (s > 0).any() else 0.0),
+            )
+            .reset_index()
+        )
+
+        # Keep the column inventories aligned with the clean 58-column export.
         raw_columns_df = pd.DataFrame({"Final_simulation_column": behaviour_export_columns})
         behaviour_columns_df = pd.DataFrame({"Clean_final_column": behaviour_export_columns})
 
@@ -3233,6 +3474,9 @@ def run_simulation() -> dict:
             "payment_type_metrics": payment_type_metrics,
             "province_metrics": province_metrics,
             "country_metrics": country_metrics,
+            "scenario_profile_behaviour": scenario_profile_behaviour,
+            "context_overlap_audit": context_overlap_audit,
+            "cash_flow_episode_audit": cash_flow_episode_audit,
             "sequence_quantiles": account_sequence_quantiles,
             "raw_columns": raw_columns_df,
             "behaviour_columns": behaviour_columns_df,
@@ -3241,16 +3485,14 @@ def run_simulation() -> dict:
 
     if EXPORT_SIMULATION_FILES:
         public_path = FULL_SAML_DIR / f"{OUTPUT_PREFIX}.csv"
-        audit_path = FEATURE_AUDIT_OUTPUT_DIR / f"{OUTPUT_PREFIX}_full_audit.csv"
         schema_path = FULL_SAML_DIR / f"{OUTPUT_PREFIX}_schema.json"
         sample_path = FULL_SAML_DIR / f"{OUTPUT_PREFIX}_sample.csv"
         dictionary_path = FULL_SAML_DIR / f"{OUTPUT_PREFIX}_data_dictionary.csv"
 
-        # Keep one public CSV in simulated_data.  The richer audit source is
-        # stored with the feature-audit outputs so it is not confused with the
-        # public analysis dataset.
+        # Keep one public CSV in simulated_data. The sample, schema and
+        # dictionary are derived from this same in-memory run, so they cannot
+        # drift from the public dataset.
         df_final[behaviour_export_columns].to_csv(public_path, index=False)
-        df_final[raw_export_columns].to_csv(audit_path, index=False)
         schema_columns = []
         for index, column in enumerate(behaviour_export_columns, start=1):
             schema_column = {
@@ -3318,12 +3560,10 @@ def run_simulation() -> dict:
             table.to_csv(FINAL_RESULTS_DIR / f"{table_name}.csv", index=False)
 
         print(f"Saved public simulation dataset to {public_path.resolve()}")
-        print(f"Saved full audit source to {audit_path.resolve()}")
         print(f"Saved public schema to {schema_path.resolve()}")
         print(f"Saved public sample ({sample_rows:,} rows) to {sample_path.resolve()}")
         print(f"Saved data dictionary to {dictionary_path.resolve()}")
         print(f"Saved {len(export_summary_tables):,} insight tables as CSV files to {FINAL_RESULTS_DIR.resolve()}")
-        print(f"Full audit columns exported: {len(raw_export_columns)}")
         print(f"Clean final columns exported: {len(behaviour_export_columns)}")
 
         if EXPORT_ENGINEERED_FEATURES:

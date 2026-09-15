@@ -45,7 +45,6 @@ from src.sa_aml_simulation.config import (
     DEFAULT_SUSPICIOUS_TX_PROB_SCALE,
 )
 from src.sa_aml_simulation.paths import (
-    FEATURE_AUDIT_DIR,
     FULL_SAML_DIR,
     SIMULATED_DATA_DIR,
     TABLE_CSV_DIR,
@@ -63,17 +62,14 @@ from src.sa_aml_simulation.figure_helpers import (
 
 def _default_input_csv(output_prefix: str | None = None) -> Path:
     prefix = output_prefix or os.getenv("AML_SIM_OUTPUT_PREFIX", DEFAULT_OUTPUT_PREFIX)
-    preferred_path = FEATURE_AUDIT_DIR / f"{prefix}_full_audit.csv"
-    if preferred_path.exists():
-        return preferred_path
-    return preferred_path
+    return SIMULATED_DATA_DIR / f"{prefix}.csv"
 
 
 def _read_simulation_csv(input_csv: str | Path | None = None) -> pd.DataFrame:
     csv_path = Path(input_csv) if input_csv else _default_input_csv()
     if not csv_path.exists():
         raise FileNotFoundError(
-            f"Simulation CSV not found: {csv_path}. Run scripts/main.py first, "
+            f"Public simulation CSV not found: {csv_path}. Run scripts/main.py first, "
             "or pass --input-csv to scripts/save_figures.py."
         )
     print(f"Loading simulation data from {csv_path}")
@@ -82,6 +78,24 @@ def _read_simulation_csv(input_csv: str | Path | None = None) -> pd.DataFrame:
 
 def _reconstruct_receiver_accounts(df_final: pd.DataFrame) -> pd.DataFrame:
     account_rows = df_final.sort_values(["Account_id", "Transaction_id"]).drop_duplicates("Account_id").copy()
+    account_dates = pd.to_datetime(df_final["Date"], errors="coerce")
+    active_days = (
+        account_dates.groupby(df_final["Account_id"]).agg(lambda values: (values.max() - values.min()).days + 1)
+    )
+    transaction_counts = df_final.groupby("Account_id", observed=True)["Transaction_id"].size()
+    if "Active_observation_days" not in account_rows.columns:
+        account_rows["Active_observation_days"] = account_rows["Account_id"].map(active_days).fillna(1).astype(int)
+    if "Generated_transaction_count" not in account_rows.columns:
+        account_rows["Generated_transaction_count"] = account_rows["Account_id"].map(transaction_counts).fillna(0).astype(int)
+    if "Expected_transaction_count" not in account_rows.columns:
+        account_rows["Expected_transaction_count"] = account_rows["Generated_transaction_count"]
+    if "Age_band" not in account_rows.columns and "Age" in account_rows.columns:
+        account_rows["Age_band"] = pd.cut(
+            pd.to_numeric(account_rows["Age"], errors="coerce"),
+            bins=[0, 24, 34, 44, 54, 64, np.inf],
+            labels=["18-24", "25-34", "35-44", "45-54", "55-64", "65+"],
+            include_lowest=True,
+        ).astype(str)
     if "Account_is_laundering" in df_final.columns:
         account_labels = (
             pd.to_numeric(df_final["Account_is_laundering"], errors="coerce")
@@ -91,9 +105,9 @@ def _reconstruct_receiver_accounts(df_final: pd.DataFrame) -> pd.DataFrame:
             .max()
         )
         account_rows["Account_is_laundering"] = account_rows["Account_id"].map(account_labels).fillna(0).astype(int)
-    # Account_id is the monitored receiver-account key. The first transaction
-    # row may have a different Receiver_account when the account sends funds,
-    # so profile joins must use the monitored account itself.
+    # Account_id is the monitored profile key. The first transaction row may
+    # have a different Receiver_account when the profile sends funds, so
+    # profile joins must use Account_id rather than an endpoint field.
     account_rows["Receiver_account"] = account_rows["Account_id"]
     account_rows = account_rows.drop(columns=["Account_id"], errors="ignore")
     return account_rows.reset_index(drop=True)
@@ -112,7 +126,7 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
     # PARAMETERS AND CONTEXT TABLES
     # ============================================================
 
-    # The full-scale default uses more monitored receiver accounts and covers
+    # The full-scale default uses more monitored Account_id profiles and covers
     # 2024-01-01 through 2026-03-31. Override these with environment variables
     # when running quick smoke tests or larger experiments.
     N_RECEIVER_ACCOUNTS = int(os.getenv("AML_SIM_N_ACCOUNTS", str(DEFAULT_N_RECEIVER_ACCOUNTS)))
@@ -524,9 +538,55 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
 
     _progress("Loading simulation CSV input.")
     df_final = _read_simulation_csv(input_csv)
+
+    # The figure pipeline consumes the compact public CSV. Recreate the
+    # account- and scenario-level aliases that are intentionally not exported
+    # as duplicate columns or diagnostic files.
+    if "Account_is_laundering" not in df_final.columns:
+        account_labels = (
+            pd.to_numeric(df_final["Is_laundering"], errors="coerce")
+            .fillna(0)
+            .astype(int)
+            .groupby(df_final["Account_id"])
+            .transform("max")
+        )
+        df_final["Account_is_laundering"] = account_labels
+    if "AML_scenario_category" not in df_final.columns:
+        df_final["AML_scenario_category"] = df_final.get(
+            "Laundering_type", pd.Series("Normal", index=df_final.index)
+        ).fillna("Normal")
+    if "Normal_behavior_category" not in df_final.columns:
+        df_final["Normal_behavior_category"] = np.where(
+            df_final["Is_laundering"].eq(0), "Normal", "Not applicable"
+        )
+
+    # These fields are derived only for plots that show contextual diagnostics.
+    # They are not treated as public modelling features.
+    derived_defaults = {
+        "Opened_for_laundering_flag": 0,
+        "Opened_during_observation_flag": 0,
+        "Beneficial_ownership_opacity": 0.0,
+        "High_risk_sector_flag": 0,
+        "High_risk_person_flag": 0,
+        "Uses_personal_account_for_business": 0,
+        "Procurement_vendor": 0,
+        "PEP_related_transaction": 0,
+        "KYC_strength": "Standard",
+        "Migrant_worker_flag": 0,
+        "Estimated_daily_cash_turnover": 0.0,
+        "Keeps_business_records": 0,
+    }
+    for column, default in derived_defaults.items():
+        if column not in df_final.columns:
+            df_final[column] = default
     df = df_final
     RAW_SIMULATION_COLUMNS = list(df_final.columns)
-    _progress(f"Loaded {len(df_final):,} transaction rows and {df_final['Account_id'].nunique():,} receiver accounts.")
+    _progress(
+        f"Loaded {len(df_final):,} transaction rows, "
+        f"{df_final['Account_id'].nunique():,} monitored Account_id profiles, "
+        f"{df_final['Receiver_account'].nunique():,} unique Receiver_account endpoints, "
+        f"and {df_final['Sender_account'].nunique():,} unique Sender_account endpoints."
+    )
 
     _progress("Reconstructing account-level summary from transaction rows.")
     receiver_accounts = _reconstruct_receiver_accounts(df_final)
@@ -557,6 +617,33 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
     df['fulldatetime'] = pd.to_datetime(
         df['Date'].astype(str) + ' ' + df['Time'].astype(str)
     )
+
+    if "First_observed_transaction_date" not in df.columns:
+        df["First_observed_transaction_date"] = (
+            df.groupby("Account_id")["fulldatetime"].transform("min").dt.normalize()
+        )
+    if "Account_age_days" not in df.columns:
+        df["Account_age_days"] = (
+            df["fulldatetime"].dt.normalize() - pd.to_datetime(df["Account_open_date"])
+        ).dt.days.clip(lower=0)
+    if "Active_observation_days" not in df.columns:
+        df["Active_observation_days"] = (
+            df.groupby("Account_id")["fulldatetime"].transform("max")
+            - df.groupby("Account_id")["fulldatetime"].transform("min")
+        ).dt.days.add(1).clip(lower=1)
+    if "Generated_transaction_count" not in df.columns:
+        df["Generated_transaction_count"] = df.groupby("Account_id")["Transaction_id"].transform("count")
+    if "Expected_transaction_count" not in df.columns:
+        df["Expected_transaction_count"] = df["Generated_transaction_count"]
+    if "currency_mismatch" not in df.columns:
+        df["currency_mismatch"] = df["Payment_currency"].ne(df["Received_currency"]).astype(int)
+    if "Age_band" not in df.columns:
+        df["Age_band"] = pd.cut(
+            pd.to_numeric(df["Age"], errors="coerce"),
+            bins=[0, 24, 34, 44, 54, 64, np.inf],
+            labels=["18-24", "25-34", "35-44", "45-54", "55-64", "65+"],
+            include_lowest=True,
+        ).astype(str)
 
     df.columns
 
@@ -1046,7 +1133,9 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
     analysis_df["year_month_dt"] = pd.to_datetime(analysis_df["year_month"] + "-01")
 
     EXPORT_INSIGHT_PLOTS = os.getenv("AML_SIM_EXPORT_INSIGHTS", "1") != "0"
-    publication_figures_saved_to = []
+    # Clear the shared helper list in place so the script's progress log and
+    # returned result accurately report the files written by this run.
+    publication_figures_saved_to.clear()
 
 
     def show_table(title, table):
@@ -1318,7 +1407,9 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
         {"metric": "Observation start", "value": str(START_DATE.date())},
         {"metric": "Observation end", "value": str(END_DATE.date())},
         {"metric": "Observation days", "value": DAYS},
-        {"metric": "Unique receiver accounts", "value": analysis_df["Account_id"].nunique()},
+        {"metric": "Monitored Account_id profiles", "value": analysis_df["Account_id"].nunique()},
+        {"metric": "Unique Receiver_account endpoints", "value": analysis_df["Receiver_account"].nunique()},
+        {"metric": "Unique Sender_account endpoints", "value": analysis_df["Sender_account"].nunique()},
         {"metric": "Transactions", "value": len(analysis_df)},
         {"metric": "Suspicious transaction share", "value": round(float(analysis_df["Is_laundering"].mean()), 4)},
         {"metric": "Suspicious account share", "value": round(float(receiver_accounts["Account_is_laundering"].mean()), 4)},
@@ -1337,18 +1428,20 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
     transaction_total = int(len(analysis_df))
     account_total = int(account_summary["Account_id"].nunique())
     publication_tables["dataset_overview"] = pd.DataFrame([
-        {"Metric": "Receiver accounts", "Value": f"{account_total:,}"},
+        {"Metric": "Monitored Account_id profiles", "Value": f"{account_total:,}"},
+        {"Metric": "Unique Receiver_account endpoints", "Value": f"{analysis_df['Receiver_account'].nunique():,}"},
+        {"Metric": "Unique Sender_account endpoints", "Value": f"{analysis_df['Sender_account'].nunique():,}"},
         {"Metric": "Transaction rows", "Value": f"{transaction_total:,}"},
-        {"Metric": "Average transactions per account", "Value": f"{transaction_total / account_total:.2f}"},
-        {"Metric": "Median transactions per account", "Value": f"{account_summary['tx_count'].median():,.0f}"},
-        {"Metric": "95th percentile transactions per account", "Value": f"{account_summary['tx_count'].quantile(0.95):,.0f}"},
-        {"Metric": "Maximum transactions per account", "Value": f"{account_summary['tx_count'].max():,.0f}"},
+        {"Metric": "Average transactions per Account_id profile", "Value": f"{transaction_total / account_total:.2f}"},
+        {"Metric": "Median transactions per Account_id profile", "Value": f"{account_summary['tx_count'].median():,.0f}"},
+        {"Metric": "95th percentile transactions per Account_id profile", "Value": f"{account_summary['tx_count'].quantile(0.95):,.0f}"},
+        {"Metric": "Maximum transactions per Account_id profile", "Value": f"{account_summary['tx_count'].max():,.0f}"},
         {"Metric": "Legitimate transaction rows", "Value": f"{int((analysis_df['Is_laundering'] == 0).sum()):,}"},
         {"Metric": "Suspicious AML transaction rows", "Value": f"{int((analysis_df['Is_laundering'] == 1).sum()):,}"},
-        {"Metric": "Legitimate accounts", "Value": f"{int((account_summary['Account_is_laundering'] == 0).sum()):,}"},
-        {"Metric": "Suspicious AML accounts", "Value": f"{int((account_summary['Account_is_laundering'] == 1).sum()):,}"},
+        {"Metric": "Legitimate Account_id profiles", "Value": f"{int((account_summary['Account_is_laundering'] == 0).sum()):,}"},
+        {"Metric": "Suspicious AML Account_id profiles", "Value": f"{int((account_summary['Account_is_laundering'] == 1).sum()):,}"},
         {"Metric": "Transaction-level suspicious share", "Value": f"{analysis_df['Is_laundering'].mean() * 100:.2f}%"},
-        {"Metric": "Account-level suspicious share", "Value": f"{account_summary['Account_is_laundering'].mean() * 100:.2f}%"},
+        {"Metric": "Account_id profile suspicious share", "Value": f"{account_summary['Account_is_laundering'].mean() * 100:.2f}%"},
     ])
     show_table("Generated dataset overview", publication_tables["dataset_overview"])
 
@@ -1384,12 +1477,12 @@ def generate_figures(input_csv: str | Path | None = None, include_legacy: bool =
         )
         .reset_index()
     )
-    show_table("Account-level sequence descriptive statistics", publication_tables["account_sequence_descriptive_stats"])
+    show_table("Account_id profile sequence descriptive statistics", publication_tables["account_sequence_descriptive_stats"])
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.8))
     for ax, data, label_col, title in [
         (axes[0], analysis_df, "Label", "Transaction Rows by Label"),
-        (axes[1], account_summary, "Label", "Receiver Accounts by Label"),
+        (axes[1], account_summary, "Label", "Monitored Account_id Profiles by Label"),
     ]:
         counts = data[label_col].value_counts().sort_index()
         colors = ["#4C78A8" if "Legitimate" in str(idx) else "#E45756" for idx in counts.index]
