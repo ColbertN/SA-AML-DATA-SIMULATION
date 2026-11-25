@@ -113,6 +113,21 @@ For sequence modelling, the grouping unit must be declared explicitly: use
 `Account_id` for monitored customer histories or `Receiver_account` for
 receiving-endpoint histories; the two units answer different questions.*
 
+## Data Repository
+
+The complete synthetic transaction dataset is deposited in Zenodo because the
+full CSV is too large for normal GitHub file storage. Zenodo is the primary
+repository for the complete data record and its citable version:
+
+- [Zenodo record: A Context-Aware Synthetic South African Retail Anti-Money Laundering Dataset](https://doi.org/10.5281/zenodo.22803333)
+- [Zenodo record page](https://zenodo.org/records/22803333)
+
+This GitHub repository provides the simulator, reproducibility scripts, schema,
+data dictionary, validation figures, logs and a small GitHub-readable sample.
+The Zenodo record provides the complete generated CSV and the associated
+release files. The data are fully synthetic and contain no real customer or
+banking records.
+
 ## Selected Validation Views
 
 The repository contains a larger set of individually saved diagnostics. The
