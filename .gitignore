@@ -31,6 +31,10 @@ results/aml_context_plots/
 # Local paper drafting files are intentionally kept outside the public simulation repository.
 paper/
 
+# Zenodo submission package is maintained separately from the GitHub repository.
+SA Data Simulation - zenodo submission/
+SA_AML_Synthetic_Dataset_Package_v1.0.0.zip
+
 # Runtime logs are generated per run. Keep folder placeholders only.
 logs/**/*.log
 
